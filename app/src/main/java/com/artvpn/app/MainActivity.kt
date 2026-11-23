@@ -93,7 +93,7 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize(), color = Color(0xFF080808)) { ArtVpnScreen() }
             }
         }
-        if (nodes.isEmpty()) refreshAndTest()
+        refreshAndTest()
     }
 
     override fun onDestroy() { runCatching { unregisterReceiver(statusReceiver) }; super.onDestroy() }
