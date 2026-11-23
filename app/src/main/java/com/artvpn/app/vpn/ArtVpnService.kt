@@ -40,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -55,6 +56,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private var commandServer: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
     private var connectionJob: Job? = null
+    private var closing = false
 
     private val healthClient by lazy {
         OkHttpClient.Builder()
@@ -75,7 +77,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun startTunnel() {
-        if (connectionJob?.isActive == true || commandServer != null) return
+        if (closing || connectionJob?.isActive == true || commandServer != null) return
+        closing = false
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, notification("Автоматически подбираем сервер…"))
         sendStatus(ACTION_CONNECTING, "Подбираем лучший сервер…")
@@ -150,7 +153,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
      * successful response proves that packets are actually passing the TUN;
      * a TCP-open node alone is never reported as connected.
      */
-    private suspend fun verifyTrafficThroughTunnel(): String? {
+    private suspend fun verifyTrafficThroughTunnel(): String? = coroutineScope {
         val probes = listOf(
             "https://cp.cloudflare.com/generate_204",
             "https://www.google.com/generate_204",
@@ -159,7 +162,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val result = CompletableDeferred<String?>()
         val remaining = AtomicInteger(probes.size)
         val jobs = probes.map { baseUrl ->
-            scope.launch(Dispatchers.IO) {
+            launch(Dispatchers.IO) {
                 try {
                     val url = "$baseUrl?artvpn_check=${System.currentTimeMillis()}"
                     val request = Request.Builder()
@@ -182,15 +185,18 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
         val winner = withTimeoutOrNull(HEALTH_PROBE_TIMEOUT_MS) { result.await() }
         jobs.forEach { it.cancel() }
-        return winner
+        winner
     }
 
     private fun stopTunnel() {
+        if (closing) return
         connectionJob?.cancel()
         closeTunnel(notifyDisconnected = true)
     }
 
     private fun closeTunnel(notifyDisconnected: Boolean) {
+        if (closing) return
+        closing = true
         scope.launch {
             runCatching { commandServer?.closeService() }
             runCatching { commandServer?.close() }
@@ -308,7 +314,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun sendNotification(notification: BoxNotification) = Unit
     override fun cancelNotification(identifier: String, typeID: Int) = Unit
     override fun serviceStop() {
-        sendStatus(ACTION_DISCONNECTED, "VPN остановлен")
         stopTunnel()
     }
     override fun serviceReload() = Unit
@@ -357,7 +362,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val MAX_CONNECTION_CANDIDATES = 5
         private const val HEALTH_PROBE_TIMEOUT_MS = 3200L
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
-        private const val FAILURE_HISTORY_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
         fun start(context: android.content.Context) {
             androidx.core.content.ContextCompat.startForegroundService(
