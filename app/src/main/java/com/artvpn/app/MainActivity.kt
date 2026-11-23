@@ -457,10 +457,14 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             try {
                 val fresh = repository.refresh()
-                status = "Проверяем лучшие варианты…"
-                val tested = NodeTester.test(fresh)
+                // If the user pressed Connect while the first list was loading,
+                // do not hold the connection behind a full TCP-ranking pass.
+                val prepared = if (connectAfterRefresh) fresh else {
+                    status = "Быстро проверяем серверы…"
+                    NodeTester.test(fresh)
+                }
                 val ranked = repository.rankForNetwork(
-                    tested, NetworkProfile.activeNetworkProfile(this@MainActivity)
+                    prepared, NetworkProfile.activeNetworkProfile(this@MainActivity)
                 )
                 nodes = ranked
                 repository.save(ranked)
