@@ -64,13 +64,25 @@ class MainActivity : ComponentActivity() {
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (it.resultCode == RESULT_OK) connectNow() else status = "Разрешение VPN не получено"
     }
+
     private val statusReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val message = intent?.getStringExtra(ArtVpnService.EXTRA_MESSAGE).orEmpty()
             when (intent?.action) {
-                ArtVpnService.ACTION_CONNECTED -> { connected = true; status = message.ifBlank { "Подключено" }; measureSpeed() }
-                ArtVpnService.ACTION_DISCONNECTED -> { connected = false; status = message.ifBlank { "Отключено" }; speed = "—" }
-                ArtVpnService.ACTION_FAILED -> { connected = false; status = message.ifBlank { "Ошибка подключения" } }
+                ArtVpnService.ACTION_CONNECTED -> {
+                    connected = true
+                    status = message.ifBlank { "Подключено" }
+                    measureSpeed()
+                }
+                ArtVpnService.ACTION_DISCONNECTED -> {
+                    connected = false
+                    status = message.ifBlank { "Отключено" }
+                    speed = "—"
+                }
+                ArtVpnService.ACTION_FAILED -> {
+                    connected = false
+                    status = message.ifBlank { "Ошибка подключения" }
+                }
             }
         }
     }
@@ -79,7 +91,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         repository = NodeRepository(this)
         nodes = repository.cached()
-        selectedId = nodes.firstOrNull { it.reachable }?.id ?: nodes.firstOrNull()?.id
+        selectedId = bestRememberedNode(nodes)?.id
         ContextCompat.registerReceiver(this, statusReceiver,
             IntentFilter().apply {
                 addAction(ArtVpnService.ACTION_CONNECTED)
@@ -96,7 +108,10 @@ class MainActivity : ComponentActivity() {
         refreshAndTest()
     }
 
-    override fun onDestroy() { runCatching { unregisterReceiver(statusReceiver) }; super.onDestroy() }
+    override fun onDestroy() {
+        runCatching { unregisterReceiver(statusReceiver) }
+        super.onDestroy()
+    }
 
     @Composable
     private fun ArtVpnScreen() {
@@ -105,11 +120,12 @@ class MainActivity : ComponentActivity() {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("ART VPN", color = Color.White, fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Text("Быстрые серверы для вашего соединения", color = Color(0xFF999999), fontSize = 12.sp)
+                    Text("Подборка серверов с проверкой VPN-трафика", color = Color(0xFF999999), fontSize = 12.sp)
                 }
                 Text(if (connected) "● ПОДКЛЮЧЕНО" else "○ ОТКЛЮЧЕНО",
                     color = if (connected) Color(0xFF9BE4B0) else Color(0xFFAAAAAA), fontSize = 11.sp)
             }
+
             Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF151515)),
                 shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -119,34 +135,46 @@ class MainActivity : ComponentActivity() {
                         Metric("СКОРОСТЬ", speed)
                         Metric("СЕРВЕРЫ", nodes.size.toString())
                     }
-                    Button(onClick = { if (connected) ArtVpnService.stop(this@MainActivity) else askVpnPermission() },
-                        modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
+                    Button(onClick = {
+                        if (connected) ArtVpnService.stop(this@MainActivity) else askVpnPermission()
+                    }, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(16.dp)) {
                         Text(if (connected) "ОТКЛЮЧИТЬ VPN" else "ПОДКЛЮЧИТЬ VPN", fontWeight = FontWeight.Bold)
                     }
-                    Text(if (connected) "Скорость измеряется через активное VPN-соединение"
-                        else "Выберите сервер или подключитесь к лучшему проверенному",
-                        color = Color(0xFF888888), fontSize = 11.sp)
+                    Text(
+                        if (connected) "Скорость измеряется через активное VPN-соединение"
+                        else "При подключении приложение переберёт серверы и проверит открытие сайтов через VPN",
+                        color = Color(0xFF888888), fontSize = 11.sp
+                    )
                 }
             }
+
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.weight(1f)) {
                     Text("Серверы", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-                    Text("Задержка TCP · сортировка по отклику", color = Color(0xFF888888), fontSize = 11.sp)
+                    Text("TCP ping · VPN OK означает успешную проверку трафика", color = Color(0xFF888888), fontSize = 11.sp)
                 }
                 TextButton(onClick = { refreshAndTest() }, enabled = !busy) { Text("ОБНОВИТЬ") }
             }
-            if (busy) Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+
+            if (busy) Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 CircularProgressIndicator(color = Color.White, modifier = Modifier.height(18.dp))
-                Text("Загружаю и проверяю узлы…", color = Color(0xFFAAAAAA), fontSize = 12.sp)
+                Text("Загружаю списки и проверяю узлы…", color = Color(0xFFAAAAAA), fontSize = 12.sp)
             }
-            if (nodes.isEmpty() && !busy) Text("Список пока пуст. Нажмите «Обновить».", color = Color(0xFF999999))
+            if (nodes.isEmpty() && !busy) {
+                Text("Список пока пуст. Нажмите «Обновить».", color = Color(0xFF999999))
+            }
+
             LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(nodes, key = { it.id }) { node ->
                     ServerRow(node, node.id == selectedId) { selectedId = node.id }
                 }
             }
-            Text("Публичные узлы могут быть нестабильны. Ping показывает TCP-доступность, а не гарантирует работу туннеля.",
-                color = Color(0xFF777777), fontSize = 10.sp)
+
+            Text(
+                "XHTTP и другие неподдерживаемые конфигурации отфильтрованы. TCP ping сам по себе не гарантирует работу VPN.",
+                color = Color(0xFF777777), fontSize = 10.sp
+            )
         }
     }
 
@@ -160,16 +188,33 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ServerRow(node: VpnNode, selected: Boolean, onClick: () -> Unit) {
-        Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = if (selected) Color(0xFF262626) else Color(0xFF141414))) {
-            Row(Modifier.padding(horizontal = 15.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
+        val recentlyVerified = node.lastSuccessAt?.let {
+            System.currentTimeMillis() - it < VERIFIED_NODE_TTL_MS
+        } == true
+        Card(Modifier.fillMaxWidth().clickable(onClick = onClick),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (selected) Color(0xFF262626) else Color(0xFF141414)
+            )) {
+            Row(Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+                verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(node.countryLabel, color = Color.White, fontWeight = FontWeight.Medium, fontSize = 14.sp)
-                    Text(node.name.ifBlank { node.host }, color = Color(0xFF8A8A8A), fontSize = 11.sp, maxLines = 1)
+                    Text(node.countryLabel, color = Color.White,
+                        fontWeight = FontWeight.Medium, fontSize = 14.sp)
+                    Text(node.name.ifBlank { node.host }, color = Color(0xFF8A8A8A),
+                        fontSize = 11.sp, maxLines = 1)
                 }
                 Column(horizontalAlignment = Alignment.End) {
-                    Text(if (node.reachable) node.pingLabel else "Недоступен",
-                        color = if (node.reachable) Color(0xFFB7E4C7) else Color(0xFF777777), fontSize = 13.sp)
+                    Text(
+                        when {
+                            recentlyVerified -> "VPN OK · ${node.pingLabel}"
+                            node.reachable -> "TCP · ${node.pingLabel}"
+                            else -> "TCP недоступен"
+                        },
+                        color = if (recentlyVerified) Color(0xFF9BE4B0)
+                            else if (node.reachable) Color(0xFFB7E4C7) else Color(0xFF777777),
+                        fontSize = 12.sp
+                    )
                     val measured = node.measuredMbps?.let {
                         "%.1f Мбит/с".format(java.util.Locale.US, it)
                     } ?: "скорость —"
@@ -181,34 +226,54 @@ class MainActivity : ComponentActivity() {
 
     private fun selectedNode(): VpnNode? = nodes.firstOrNull { it.id == selectedId }
 
+    private fun bestRememberedNode(list: List<VpnNode>): VpnNode? =
+        list.firstOrNull { it.lastSuccessAt != null }
+            ?: list.firstOrNull { it.reachable }
+            ?: list.firstOrNull()
+
     private fun refreshAndTest() {
         if (busy) return
         busy = true
-        status = "Обновляю список…"
+        status = "Обновляю список серверов…"
         CoroutineScope(Dispatchers.Main).launch {
             try {
                 val fresh = runCatching { repository.refresh() }.getOrElse { error ->
                     repository.cached().takeIf { it.isNotEmpty() } ?: throw error
                 }
-                status = "Проверяю ${fresh.size} серверов…"
+                status = "Проверяю TCP-доступность ${fresh.size} серверов…"
                 val tested = NodeTester.test(fresh)
                 nodes = tested
                 repository.save(tested)
-                selectedId = tested.firstOrNull { it.reachable }?.id ?: tested.firstOrNull()?.id
-                status = "Проверка завершена"
-            } catch (e: Exception) { status = e.message ?: "Не удалось обновить серверы" }
-            finally { busy = false }
+                selectedId = bestRememberedNode(tested)?.id
+                val vpnVerified = tested.count { it.lastSuccessAt != null }
+                status = if (vpnVerified > 0) "Список обновлён · есть ранее проверенные VPN"
+                    else "Список обновлён · реальная проверка будет при подключении"
+            } catch (e: Exception) {
+                status = e.message ?: "Не удалось обновить серверы"
+            } finally {
+                busy = false
+            }
         }
     }
 
     private fun askVpnPermission() {
-        val selected = selectedNode() ?: run { status = "Сначала обновите список серверов"; return }
-        if (!selected.reachable) { status = "Этот сервер не прошёл TCP-проверку"; return }
+        val selected = selectedNode() ?: run {
+            status = "Сначала обновите список серверов"
+            return
+        }
+        if (!selected.reachable) {
+            status = "У выбранного сервера нет TCP-ответа; попробую его и резервные узлы"
+        } else {
+            status = "Запускаю сервер и проверяю реальный трафик…"
+        }
         repository.saveSelected(selected.shareLink)
         val permission = VpnService.prepare(this)
         if (permission == null) connectNow() else vpnPermission.launch(permission)
     }
-    private fun connectNow() { ArtVpnService.start(this) }
+
+    private fun connectNow() {
+        ArtVpnService.start(this)
+    }
 
     private fun measureSpeed() {
         if (speedJobRunning) return
@@ -216,9 +281,13 @@ class MainActivity : ComponentActivity() {
         val activeNodeId = selectedId
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val client = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
-                val request = Request.Builder().url("https://speed.cloudflare.com/__down?bytes=2000000")
-                    .header("Cache-Control", "no-cache").build()
+                val client = OkHttpClient.Builder()
+                    .callTimeout(15, TimeUnit.SECONDS)
+                    .build()
+                val request = Request.Builder()
+                    .url("https://speed.cloudflare.com/__down?bytes=2000000")
+                    .header("Cache-Control", "no-cache")
+                    .build()
                 val started = System.nanoTime()
                 val bytes = client.newCall(request).execute().use { response ->
                     check(response.isSuccessful) { "Speed test HTTP ${response.code}" }
@@ -242,5 +311,9 @@ class MainActivity : ComponentActivity() {
                 kotlinx.coroutines.withContext(Dispatchers.Main) { speedJobRunning = false }
             }
         }
+    }
+
+    companion object {
+        private const val VERIFIED_NODE_TTL_MS = 7L * 24 * 60 * 60 * 1000
     }
 }
