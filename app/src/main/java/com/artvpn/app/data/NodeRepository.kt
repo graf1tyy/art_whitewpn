@@ -68,8 +68,12 @@ class NodeRepository(context: Context) {
         }
 
         val merged = linkedMapOf<String, VpnNode>()
-        for (parsed in fetched) {
-            for (node in parsed) {
+        // Interleave feeds so the fast TCP sample covers every source. Without
+        // this, the first whitelist could occupy all early probe slots.
+        val maxFeedSize = fetched.maxOfOrNull { it.size } ?: 0
+        for (index in 0 until maxFeedSize) {
+            for (parsed in fetched) {
+                val node = parsed.getOrNull(index) ?: continue
                 val old = previous[node.id]
                 merged[node.id] = node.copy(
                     lastSuccessAt = old?.lastSuccessAt,
