@@ -74,16 +74,22 @@ class NodeRepository(context: Context) {
      */
     suspend fun refresh(): List<VpnNode> = withContext(Dispatchers.IO) {
         val previous = cached().associateBy { it.id }
-        val paths = listOf(
-            "Vless-Reality-White-Lists-Rus-Mobile.txt",
-            "WHITE-CIDR-RU-all.txt"
+        // Primary whitelist feeds plus a separately maintained RU/CIS VLESS pool.
+        // The phone still validates real tunnel traffic before trusting any node.
+        val feeds = listOf(
+            sourceUrls("Vless-Reality-White-Lists-Rus-Mobile.txt"),
+            sourceUrls("WHITE-CIDR-RU-all.txt"),
+            listOf(
+                "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
+                "https://raw.githack.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt"
+            )
         )
         val fetched = coroutineScope {
-            paths.map { path -> async { path to fetchFirstAvailable(path) } }.awaitAll()
+            feeds.map { urls -> async { fetchFirstAvailable(urls) } }.awaitAll()
         }
 
         val merged = linkedMapOf<String, VpnNode>()
-        for ((_, parsed) in fetched) {
+        for (parsed in fetched) {
             for (node in parsed) {
                 val old = previous[node.id]
                 merged[node.id] = node.copy(
@@ -104,8 +110,7 @@ class NodeRepository(context: Context) {
         result
     }
 
-    private suspend fun fetchFirstAvailable(path: String): List<VpnNode> = coroutineScope {
-        val urls = sourceUrls(path)
+    private suspend fun fetchFirstAvailable(urls: List<String>): List<VpnNode> = coroutineScope {
         val result = CompletableDeferred<List<VpnNode>>()
         val remaining = AtomicInteger(urls.size)
         val jobs = urls.map { source ->
@@ -186,7 +191,7 @@ class NodeRepository(context: Context) {
             val host = uri.host ?: return null
             val port = uri.port.takeIf { it in 1..65535 } ?: return null
             val uuid = uri.userInfo ?: return null
-            require(uuid.isNotBlank())
+            require(UUID_PATTERN.matches(uuid)) { "Invalid VLESS UUID" }
 
             val params = query(uri.rawQuery.orEmpty())
             val transport = params["type"].orEmpty().lowercase()
@@ -195,6 +200,8 @@ class NodeRepository(context: Context) {
             }
             val security = params["security"].orEmpty().lowercase()
             require(security in SUPPORTED_SECURITY)
+            val flow = params["flow"].orEmpty()
+            require(flow in SUPPORTED_FLOWS) { "Unsupported VLESS flow: $flow" }
             if (security == "reality") {
                 require(!params["pbk"].isNullOrBlank()) { "Reality public key missing" }
                 require(!params["sni"].isNullOrBlank()) { "Reality SNI missing" }
@@ -252,6 +259,89 @@ class NodeRepository(context: Context) {
         MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
             .joinToString("") { "%02x".format(it) }
 
+    /**
+     * Carrier outcomes stay local. A failure on one operator must not poison
+     * a server for every other operator; two recent failures are needed before
+     * it is temporarily pushed down the list.
+     */
+    fun rankForOperator(nodes: List<VpnNode>, operatorKey: String?): List<VpnNode> {
+        if (operatorKey.isNullOrBlank()) return nodes.sortedWith(NodeTester.priorityComparator())
+        val histories = nodes.associate { it.id to readOperatorHistory(operatorKey, it.shareLink) }
+        val now = System.currentTimeMillis()
+        val base = NodeTester.priorityComparator()
+        return nodes.sortedWith(Comparator { first, second ->
+            val a = histories[first.id] ?: OperatorHistory()
+            val b = histories[second.id] ?: OperatorHistory()
+            val aPenalty = if (a.failureCount >= OPERATOR_FAILURE_THRESHOLD &&
+                now - a.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
+            val bPenalty = if (b.failureCount >= OPERATOR_FAILURE_THRESHOLD &&
+                now - b.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
+            val penaltyCompare = aPenalty.compareTo(bPenalty)
+            if (penaltyCompare != 0) penaltyCompare else {
+                val successCompare = b.lastSuccessAt.compareTo(a.lastSuccessAt)
+                if (successCompare != 0) successCompare else base.compare(first, second)
+            }
+        })
+    }
+
+    fun hasRecentOperatorSuccess(link: String, operatorKey: String?, maxAgeMs: Long): Boolean {
+        if (operatorKey.isNullOrBlank()) return false
+        val successAt = readOperatorHistory(operatorKey, link).lastSuccessAt
+        return successAt > 0L && System.currentTimeMillis() - successAt < maxAgeMs
+    }
+
+    private fun readOperatorHistory(operatorKey: String, link: String): OperatorHistory {
+        val fields = prefs.getString(operatorHistoryKey(operatorKey, link), null)?.split('|').orEmpty()
+        return OperatorHistory(
+            lastSuccessAt = fields.getOrNull(0)?.toLongOrNull() ?: 0L,
+            lastFailureAt = fields.getOrNull(1)?.toLongOrNull() ?: 0L,
+            failureCount = fields.getOrNull(2)?.toIntOrNull() ?: 0
+        )
+    }
+
+    private fun operatorHistoryKey(operatorKey: String, link: String): String =
+        "operator_\${sha256(operatorKey).take(16)}_\${sha256(link).take(24)}"
+
+    fun markSuccessful(link: String, operatorKey: String? = null) {
+        val now = System.currentTimeMillis()
+        save(cached().map { node ->
+            if (node.shareLink == link) node.copy(
+                lastSuccessAt = now,
+                lastFailureAt = null,
+                failureCount = 0
+            ) else node
+        })
+        if (!operatorKey.isNullOrBlank()) {
+            prefs.edit().putString(operatorHistoryKey(operatorKey, link), "$now|0|0").apply()
+        }
+    }
+
+    fun markFailed(link: String, operatorKey: String? = null) {
+        if (operatorKey.isNullOrBlank()) {
+            val now = System.currentTimeMillis()
+            save(cached().map { node ->
+                if (node.shareLink == link) node.copy(
+                    lastFailureAt = now,
+                    failureCount = (node.failureCount + 1).coerceAtMost(20)
+                ) else node
+            })
+            return
+        }
+        val old = readOperatorHistory(operatorKey, link)
+        val now = System.currentTimeMillis()
+        val failures = (old.failureCount + 1).coerceAtMost(20)
+        prefs.edit().putString(
+            operatorHistoryKey(operatorKey, link),
+            "\${old.lastSuccessAt}|$now|$failures"
+        ).apply()
+    }
+
+    private data class OperatorHistory(
+        val lastSuccessAt: Long = 0L,
+        val lastFailureAt: Long = 0L,
+        val failureCount: Int = 0
+    )
+
     private fun encodeCache(nodes: List<VpnNode>): String = nodes.joinToString("\n") { node ->
         listOf(
             node.id, node.name, node.host, node.port.toString(), node.shareLink, node.country,
@@ -284,7 +374,13 @@ class NodeRepository(context: Context) {
     companion object {
         private const val MAX_SUBSCRIPTION_BYTES = 4 * 1024 * 1024L
         private const val MIRROR_RACE_TIMEOUT_MS = 7_500L
+        private const val OPERATOR_FAILURE_THRESHOLD = 2
+        private const val OPERATOR_FAILURE_COOLDOWN_MS = 30L * 60 * 1000
+        private val UUID_PATTERN = Regex(
+            "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+        )
         private val SUPPORTED_TRANSPORTS = setOf("", "tcp", "ws", "grpc", "http", "httpupgrade")
         private val SUPPORTED_SECURITY = setOf("", "none", "tls", "reality")
+        private val SUPPORTED_FLOWS = setOf("", "xtls-rprx-vision")
     }
 }
