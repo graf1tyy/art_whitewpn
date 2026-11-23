@@ -35,7 +35,7 @@ object NetworkProfile {
 
         val identity = operatorCode.takeIf { it.length in 5..6 }
             ?: operatorName.takeIf { it.isNotBlank() }
-            ?: "unknown"
+            ?: return@runCatching null
         "cellular:$identity"
     }.getOrNull()
 }
