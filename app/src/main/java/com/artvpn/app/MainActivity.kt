@@ -170,7 +170,10 @@ class MainActivity : ComponentActivity() {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(if (node.reachable) node.pingLabel else "Недоступен",
                         color = if (node.reachable) Color(0xFFB7E4C7) else Color(0xFF777777), fontSize = 13.sp)
-                    Text(node.protocol, color = Color(0xFF777777), fontSize = 10.sp)
+                    val measured = node.measuredMbps?.let {
+                        "%.1f Мбит/с".format(java.util.Locale.US, it)
+                    } ?: "скорость —"
+                    Text("$measured · ${node.protocol}", color = Color(0xFF777777), fontSize = 10.sp)
                 }
             }
         }
@@ -210,6 +213,7 @@ class MainActivity : ComponentActivity() {
     private fun measureSpeed() {
         if (speedJobRunning) return
         speedJobRunning = true
+        val activeNodeId = selectedId
         CoroutineScope(Dispatchers.IO).launch {
             try {
                 val client = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
@@ -222,7 +226,16 @@ class MainActivity : ComponentActivity() {
                 }
                 val seconds = ((System.nanoTime() - started).coerceAtLeast(1L)) / 1_000_000_000.0
                 val mbps = bytes * 8.0 / seconds / 1_000_000.0
-                kotlinx.coroutines.withContext(Dispatchers.Main) { speed = "%.1f Мбит/с".format(java.util.Locale.US, mbps) }
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    speed = "%.1f Мбит/с".format(java.util.Locale.US, mbps)
+                    if (activeNodeId != null) {
+                        val updated = nodes.map { node ->
+                            if (node.id == activeNodeId) node.copy(measuredMbps = mbps) else node
+                        }
+                        nodes = updated
+                        repository.save(updated)
+                    }
+                }
             } catch (_: Exception) {
                 kotlinx.coroutines.withContext(Dispatchers.Main) { speed = "нет данных" }
             } finally {
