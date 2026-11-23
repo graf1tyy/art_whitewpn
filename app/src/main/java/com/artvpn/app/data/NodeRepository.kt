@@ -111,7 +111,7 @@ class NodeRepository(context: Context) {
         val jobs = urls.map { source ->
             launch {
                 try {
-                    val parsed = requestNodes(source)
+                    val parsed = runCatching { requestNodes(source) }.getOrDefault(emptyList())
                     if (parsed.isNotEmpty()) result.complete(parsed)
                 } finally {
                     if (remaining.decrementAndGet() == 0) result.complete(emptyList())
