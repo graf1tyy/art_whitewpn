@@ -62,9 +62,9 @@ object NodeTester {
             .thenBy { it.failureCount }
     }
 
-    private const val MAX_TCP_PROBES = 48
-    private const val MAX_PARALLEL_PROBES = 24
-    private const val CONNECT_TIMEOUT_MS = 1_800
+    private const val MAX_TCP_PROBES = 24
+    private const val MAX_PARALLEL_PROBES = 12
+    private const val CONNECT_TIMEOUT_MS = 1_200
     private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
     private const val SUCCESS_TTL_MS = 24L * 60 * 60 * 1000
 }
