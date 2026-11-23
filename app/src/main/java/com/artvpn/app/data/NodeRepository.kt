@@ -83,13 +83,26 @@ class NodeRepository(context: Context) {
         MessageDigest.getInstance("SHA-256").digest(value.toByteArray()).joinToString("") { "%02x".format(it) }
 
     private fun encodeCache(nodes: List<VpnNode>): String = nodes.joinToString("\n") { node ->
-        listOf(node.id, node.name, node.host, node.port.toString(), node.shareLink, node.country)
-            .joinToString("\t") { android.util.Base64.encodeToString(it.toByteArray(), android.util.Base64.NO_WRAP) }
+        listOf(
+            node.id, node.name, node.host, node.port.toString(), node.shareLink, node.country,
+            node.pingMs?.toString().orEmpty(), node.reachable.toString(),
+            node.measuredMbps?.toString().orEmpty()
+        ).joinToString("\t") {
+            android.util.Base64.encodeToString(it.toByteArray(), android.util.Base64.NO_WRAP)
+        }
     }
     private fun decodeCache(value: String): List<VpnNode> = value.lineSequence().mapNotNull { line ->
         runCatching {
-            val fields = line.split("\t").map { String(android.util.Base64.decode(it, android.util.Base64.NO_WRAP)) }
-            VpnNode(fields[0], fields[1], fields[2], fields[3].toInt(), fields[4], fields[5])
+            val fields = line.split("\t").map {
+                String(android.util.Base64.decode(it, android.util.Base64.NO_WRAP))
+            }
+            VpnNode(
+                id = fields[0], name = fields[1], host = fields[2], port = fields[3].toInt(),
+                shareLink = fields[4], country = fields[5],
+                pingMs = fields.getOrNull(6)?.toLongOrNull(),
+                reachable = fields.getOrNull(7)?.toBooleanStrictOrNull() ?: false,
+                measuredMbps = fields.getOrNull(8)?.toDoubleOrNull()
+            )
         }.getOrNull()
     }.toList()
 
