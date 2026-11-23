@@ -40,27 +40,6 @@ class NodeRepository(context: Context) {
         prefs.edit().putString("nodes", encodeCache(nodes)).apply()
     }
 
-    fun markSuccessful(link: String) {
-        val now = System.currentTimeMillis()
-        save(cached().map { node ->
-            if (node.shareLink == link) node.copy(
-                lastSuccessAt = now,
-                lastFailureAt = null,
-                failureCount = 0
-            ) else node
-        })
-    }
-
-    fun markFailed(link: String) {
-        val now = System.currentTimeMillis()
-        save(cached().map { node ->
-            if (node.shareLink == link) node.copy(
-                lastFailureAt = now,
-                failureCount = (node.failureCount + 1).coerceAtMost(20)
-            ) else node
-        })
-    }
-
     fun saveSelected(link: String) {
         prefs.edit().putString("selected_link", link).apply()
     }
