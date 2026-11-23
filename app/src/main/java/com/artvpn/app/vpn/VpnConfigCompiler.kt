@@ -103,7 +103,6 @@ object VpnConfigCompiler {
                 .put("mtu", 1380).put("auto_route", true).put("strict_route", true)))
             .put("outbounds", outbounds)
             .put("route", JSONObject()
-                .put("auto_detect_interface", true)
                 .put("override_android_vpn", true)
                 .put("rules", JSONArray().put(
                     JSONObject().put("protocol", "dns").put("action", "hijack-dns")
