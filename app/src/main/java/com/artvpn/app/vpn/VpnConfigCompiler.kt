@@ -53,7 +53,12 @@ object VpnConfigCompiler {
                 .put("address", JSONArray().put("172.19.0.1/30")).put("mtu", 1400)
                 .put("auto_route", true).put("strict_route", false)))
             .put("outbounds", outbounds)
-            .put("route", JSONObject().put("auto_detect_interface", true).put("final", "proxy"))
+            .put("route", JSONObject()
+                .put("auto_detect_interface", true)
+                .put("rules", JSONArray().put(
+                    JSONObject().put("protocol", "dns").put("action", "hijack-dns")
+                ))
+                .put("final", "proxy"))
         return config.toString()
     }
     private fun query(raw: String): Map<String, String> = raw.split("&").filter { it.isNotBlank() }
