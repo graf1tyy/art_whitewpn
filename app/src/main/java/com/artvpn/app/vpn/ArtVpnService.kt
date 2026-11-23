@@ -10,6 +10,7 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
@@ -66,9 +67,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private val healthClient by lazy {
         OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
-            .connectTimeout(1500, TimeUnit.MILLISECONDS)
-            .readTimeout(1800, TimeUnit.MILLISECONDS)
-            .callTimeout(2200, TimeUnit.MILLISECONDS)
+            .connectTimeout(1200, TimeUnit.MILLISECONDS)
+            .readTimeout(1400, TimeUnit.MILLISECONDS)
+            .callTimeout(1600, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(false)
             .build()
     }
@@ -175,7 +176,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private suspend fun verifyTrafficThroughTunnel(): String? = coroutineScope {
         val probes = listOf(
             "https://cp.cloudflare.com/generate_204",
-            "https://www.google.com/generate_204",
             "https://yandex.ru/robots.txt"
         )
         val result = CompletableDeferred<String?>()
@@ -421,7 +421,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun getSystemProxyStatus(): SystemProxyStatus? = null
     override fun setSystemProxyEnabled(isEnabled: Boolean) = Unit
     override fun triggerNativeCrash() = Unit
-    override fun writeDebugMessage(message: String?) = Unit
+    override fun writeDebugMessage(message: String?) {
+        Log.d("ARTVPN-singbox", message.orEmpty())
+    }
     override fun connectSSHAgent(): Int = -1
 
     private class InterfaceArray(
@@ -450,7 +452,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val CHANNEL_ID = "artvpn-vpn"
         private const val NOTIFICATION_ID = 41
         private const val MAX_CONNECTION_CANDIDATES = 3
-        private const val HEALTH_PROBE_TIMEOUT_MS = 2400L
+        private const val HEALTH_PROBE_TIMEOUT_MS = 1800L
         private const val PREFERRED_SUCCESS_TTL_MS = 12L * 60 * 60 * 1000
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
