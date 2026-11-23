@@ -196,7 +196,7 @@ class MainActivity : ComponentActivity() {
                     Text(
                         "Простой и автоматический",
                         color = Color(0xFF9B9B9B),
-                        fontSize = 15.sp
+                        fontSize = 14.sp
                     )
                 }
                 Spacer(Modifier.weight(1f))
@@ -216,7 +216,7 @@ class MainActivity : ComponentActivity() {
                     else -> "Безопасный интернет"
                 },
                 color = Color.White,
-                fontSize = 25.sp,
+                fontSize = 28.sp,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center
             )
@@ -255,7 +255,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Surface(
                     onClick = { onPowerButtonClick() },
-                    modifier = Modifier.size(216.dp).scale(pulse),
+                    modifier = Modifier.size(230.dp).scale(pulse),
                     shape = CircleShape,
                     color = buttonColor,
                     contentColor = buttonTextColor,
@@ -275,7 +275,7 @@ class MainActivity : ComponentActivity() {
                             Icon(
                                 imageVector = Icons.Filled.PowerSettingsNew,
                                 contentDescription = null,
-                                modifier = Modifier.size(66.dp)
+                                modifier = Modifier.size(72.dp)
                             )
                         }
                         Spacer(Modifier.height(14.dp))
@@ -285,14 +285,14 @@ class MainActivity : ComponentActivity() {
                                 connecting -> "ОТМЕНИТЬ"
                                 else -> "ПОДКЛЮЧИТЬ"
                             },
-                            fontSize = 18.sp,
+                            fontSize = 20.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.height(28.dp))
+            Spacer(Modifier.height(20.dp))
             Text(
                 if (connected) "Соединение активно"
                 else if (connecting) "Проверяем серверы и интернет"
