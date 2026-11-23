@@ -60,7 +60,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private var tunnel: ParcelFileDescriptor? = null
     private var connectionJob: Job? = null
     private var closing = false
-    private val networkMonitor by lazy { DefaultNetworkMonitor(this) }
+    private val networkMonitorDelegate = lazy { DefaultNetworkMonitor(this) }
+    private val networkMonitor by networkMonitorDelegate
 
     private val healthClient by lazy {
         OkHttpClient.Builder()
@@ -265,6 +266,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onDestroy() {
         VpnSocketProtector.uninstall()
+        if (networkMonitorDelegate.isInitialized()) runCatching { networkMonitor.stop() }
         scope.cancel()
         super.onDestroy()
     }
@@ -348,7 +350,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun getInterfaces(): NetworkInterfaceIterator {
         val connectivity = getSystemService(ConnectivityManager::class.java)
-            ?: return InterfaceList(emptyList())
+            ?: return InterfaceArray(emptyList())
         val systemInterfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
         val interfaces = connectivity.allNetworks.mapNotNull { network ->
             val properties = runCatching { connectivity.getLinkProperties(network) }.getOrNull()
