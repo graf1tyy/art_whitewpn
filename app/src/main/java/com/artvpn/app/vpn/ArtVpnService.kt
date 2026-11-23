@@ -11,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import androidx.core.app.NotificationCompat
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
+import com.artvpn.app.data.NetworkProfile
 import com.artvpn.app.data.NodeRepository
 import com.artvpn.app.data.NodeTester
 import com.artvpn.app.data.VpnNode
