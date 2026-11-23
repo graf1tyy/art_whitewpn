@@ -120,7 +120,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     try {
                         val config = VpnConfigCompiler.compile(node)
                         server.startOrReloadService(config, OverrideOptions())
-                        delay(350)
+                        delay(700)
 
                         if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
@@ -365,8 +365,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         const val EXTRA_MESSAGE = "message"
         private const val CHANNEL_ID = "artvpn-vpn"
         private const val NOTIFICATION_ID = 41
-        private const val MAX_CONNECTION_CANDIDATES = 5
-        private const val HEALTH_PROBE_TIMEOUT_MS = 3200L
+        private const val MAX_CONNECTION_CANDIDATES = 3
+        private const val HEALTH_PROBE_TIMEOUT_MS = 5500L
         private const val PREFERRED_SUCCESS_TTL_MS = 12L * 60 * 60 * 1000
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
