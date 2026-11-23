@@ -125,7 +125,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         repository = NodeRepository(this)
         nodes = repository.rankForOperator(
-            repository.cached(), NetworkProfile.activeCellularOperator(this)
+            repository.cached(), NetworkProfile.activeNetworkProfile(this)
         )
         selectedId = bestRememberedNode(nodes)?.id
 
@@ -448,7 +448,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun bestRememberedNode(list: List<VpnNode>): VpnNode? =
-        repository.rankForOperator(list, NetworkProfile.activeCellularOperator(this)).firstOrNull()
+        repository.rankForOperator(list, NetworkProfile.activeNetworkProfile(this)).firstOrNull()
 
     private fun refreshAndTest() {
         if (busy) return
@@ -460,7 +460,7 @@ class MainActivity : ComponentActivity() {
                 status = "Проверяем лучшие варианты…"
                 val tested = NodeTester.test(fresh)
                 val ranked = repository.rankForOperator(
-                    tested, NetworkProfile.activeCellularOperator(this@MainActivity)
+                    tested, NetworkProfile.activeNetworkProfile(this@MainActivity)
                 )
                 nodes = ranked
                 repository.save(ranked)
@@ -472,7 +472,7 @@ class MainActivity : ComponentActivity() {
                 val cached = repository.cached()
                 if (cached.isNotEmpty()) {
                     nodes = repository.rankForOperator(
-                        cached, NetworkProfile.activeCellularOperator(this@MainActivity)
+                        cached, NetworkProfile.activeNetworkProfile(this@MainActivity)
                     )
                     selectedId = nodes.firstOrNull()?.id
                     status = "Используем сохранённый список"
