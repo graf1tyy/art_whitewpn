@@ -76,6 +76,11 @@ internal class DefaultNetworkMonitor(context: Context) {
             registered = false
         }
         network = null
+    }
+
+    @Synchronized
+    fun close() {
+        stop()
         handlerThread.quitSafely()
     }
 
