@@ -14,22 +14,24 @@ import java.util.concurrent.TimeUnit
 
 object NodeTester {
     /**
-     * This is explicitly a TCP reachability check, not proof that the VLESS
-     * handshake or end-to-end tunnel works. Real tunnel verification is done
-     * by ArtVpnService after it starts sing-box.
+     * A quick physical TCP check only. Actual VLESS and HTTPS tunnel usability
+     * is verified by ArtVpnService. Probe the most promising nodes, not every
+     * entry in a large public list.
      */
     suspend fun test(nodes: List<VpnNode>): List<VpnNode> = withContext(Dispatchers.IO) {
-        val semaphore = Semaphore(10)
-        coroutineScope {
-            nodes.map { node ->
+        if (nodes.isEmpty()) return@withContext emptyList()
+        val ranked = nodes.sortedWith(priorityComparator())
+        val probeIds = ranked.take(MAX_TCP_PROBES).map { it.id }.toSet()
+        val semaphore = Semaphore(MAX_PARALLEL_PROBES)
+        val tested = coroutineScope {
+            nodes.filter { it.id in probeIds }.map { node ->
                 async {
                     semaphore.withPermit {
                         val socket = Socket()
                         try {
-                            // Probe the physical connection, never the tunnel being tested.
                             check(VpnSocketProtector.protect(socket)) { "Cannot protect probe socket" }
                             val start = System.nanoTime()
-                            socket.connect(InetSocketAddress(node.host, node.port), 3500)
+                            socket.connect(InetSocketAddress(node.host, node.port), CONNECT_TIMEOUT_MS)
                             node.copy(
                                 pingMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start),
                                 reachable = true
@@ -41,11 +43,27 @@ object NodeTester {
                         }
                     }
                 }
-            }.awaitAll().sortedWith(
-                compareByDescending<VpnNode> { it.lastSuccessAt ?: 0L }
-                    .thenBy { !it.reachable }
-                    .thenBy { it.pingMs ?: Long.MAX_VALUE }
-            )
+            }.awaitAll()
         }
+        val byId = tested.associateBy { it.id }
+        nodes.map { byId[it.id] ?: it }.sortedWith(priorityComparator())
     }
+
+    fun priorityComparator(): Comparator<VpnNode> {
+        val now = System.currentTimeMillis()
+        return compareBy<VpnNode> {
+            val failedRecently = it.lastFailureAt?.let { failedAt ->
+                now - failedAt < FAILURE_COOLDOWN_MS
+            } == true
+            if (failedRecently) 1 else 0
+        }.thenByDescending { it.lastSuccessAt ?: 0L }
+            .thenBy { !it.reachable }
+            .thenBy { it.pingMs ?: Long.MAX_VALUE }
+            .thenBy { it.failureCount }
+    }
+
+    private const val MAX_TCP_PROBES = 48
+    private const val MAX_PARALLEL_PROBES = 24
+    private const val CONNECT_TIMEOUT_MS = 1_800
+    private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 }
