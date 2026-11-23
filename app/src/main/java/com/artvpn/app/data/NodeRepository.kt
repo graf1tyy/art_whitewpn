@@ -1,22 +1,35 @@
 package com.artvpn.app.data
 
 import android.content.Context
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.resume
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 
 class NodeRepository(context: Context) {
     private val prefs = context.getSharedPreferences("artvpn", Context.MODE_PRIVATE)
     private val client = OkHttpClient.Builder()
-        .connectTimeout(7, TimeUnit.SECONDS)
-        .readTimeout(14, TimeUnit.SECONDS)
-        .callTimeout(18, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .callTimeout(7, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(false)
         .followRedirects(true)
         .build()
 
@@ -30,7 +43,21 @@ class NodeRepository(context: Context) {
     fun markSuccessful(link: String) {
         val now = System.currentTimeMillis()
         save(cached().map { node ->
-            if (node.shareLink == link) node.copy(lastSuccessAt = now) else node
+            if (node.shareLink == link) node.copy(
+                lastSuccessAt = now,
+                lastFailureAt = null,
+                failureCount = 0
+            ) else node
+        })
+    }
+
+    fun markFailed(link: String) {
+        val now = System.currentTimeMillis()
+        save(cached().map { node ->
+            if (node.shareLink == link) node.copy(
+                lastFailureAt = now,
+                failureCount = (node.failureCount + 1).coerceAtMost(20)
+            ) else node
         })
     }
 
@@ -41,10 +68,9 @@ class NodeRepository(context: Context) {
     fun selectedLink(): String? = prefs.getString("selected_link", null)
 
     /**
-     * The upstream maintains separate mobile and full whitelist subscriptions.
-     * Use the Yandex+Bitbucket mirror first because the upstream documents it
-     * specifically for networks where only Russian whitelist destinations work.
-     * Merge both lists and discard transports not implemented by our libbox.
+     * Fetch both official subscription files concurrently. For each file, race
+     * the documented mirrors and keep the first valid, supported VLESS list.
+     * A failed mirror must never hold the user behind a long serial timeout.
      */
     suspend fun refresh(): List<VpnNode> = withContext(Dispatchers.IO) {
         val previous = cached().associateBy { it.id }
@@ -52,67 +78,95 @@ class NodeRepository(context: Context) {
             "Vless-Reality-White-Lists-Rus-Mobile.txt",
             "WHITE-CIDR-RU-all.txt"
         )
-        val merged = linkedMapOf<String, VpnNode>()
-        val failures = mutableListOf<String>()
+        val fetched = coroutineScope {
+            paths.map { path -> async { path to fetchFirstAvailable(path) } }.awaitAll()
+        }
 
-        for (path in paths) {
-            var parsedForPath: List<VpnNode> = emptyList()
-            var lastError: Exception? = null
-            for (source in sourceUrls(path)) {
-                try {
-                    val request = Request.Builder()
-                        .url(source)
-                        .header("User-Agent", "ART-VPN/0.2 Android")
-                        .header("Accept", "text/plain,*/*")
-                        .build()
-                    val body = client.newCall(request).execute().use { response ->
-                        check(response.isSuccessful) { "HTTP ${response.code}" }
-                        val bytes = response.body?.bytes() ?: error("Empty subscription")
-                        check(bytes.size <= MAX_SUBSCRIPTION_BYTES) { "Subscription is too large" }
-                        bytes.toString(Charsets.UTF_8)
-                    }
-                    parsedForPath = extractVless(body)
-                        .mapNotNull(::parseVless)
-                        .distinctBy { it.id }
-                        .toList()
-                    if (parsedForPath.isNotEmpty()) break
-                    lastError = IllegalStateException("No supported VLESS nodes")
-                } catch (e: Exception) {
-                    lastError = e
-                }
-            }
-            if (parsedForPath.isEmpty()) {
-                failures += "$path: ${lastError?.message ?: "source unavailable"}"
-            } else {
-                for (node in parsedForPath) {
-                    val old = previous[node.id]
-                    merged[node.id] = node.copy(
-                        lastSuccessAt = old?.lastSuccessAt,
-                        measuredMbps = old?.measuredMbps
-                    )
-                }
+        val merged = linkedMapOf<String, VpnNode>()
+        for ((_, parsed) in fetched) {
+            for (node in parsed) {
+                val old = previous[node.id]
+                merged[node.id] = node.copy(
+                    lastSuccessAt = old?.lastSuccessAt,
+                    lastFailureAt = old?.lastFailureAt,
+                    failureCount = old?.failureCount ?: 0,
+                    measuredMbps = old?.measuredMbps
+                )
             }
         }
 
         check(merged.isNotEmpty()) {
-            failures.joinToString("; ").ifBlank { "No compatible whitelist servers found" }
+            "Не удалось получить совместимые серверы ни с одного зеркала. " +
+                "Проверьте интернет и попробуйте ещё раз."
         }
         val result = merged.values.toList()
         save(result)
         result
     }
 
+    private suspend fun fetchFirstAvailable(path: String): List<VpnNode> = coroutineScope {
+        val urls = sourceUrls(path)
+        val result = CompletableDeferred<List<VpnNode>>()
+        val remaining = AtomicInteger(urls.size)
+        val jobs = urls.map { source ->
+            launch {
+                try {
+                    val parsed = requestNodes(source)
+                    if (parsed.isNotEmpty()) result.complete(parsed)
+                } finally {
+                    if (remaining.decrementAndGet() == 0) result.complete(emptyList())
+                }
+            }
+        }
+
+        val winner = withTimeoutOrNull(MIRROR_RACE_TIMEOUT_MS) { result.await() }.orEmpty()
+        jobs.forEach { it.cancel() }
+        winner
+    }
+
+    private suspend fun requestNodes(source: String): List<VpnNode> =
+        suspendCancellableCoroutine { continuation ->
+            val request = Request.Builder()
+                .url(source)
+                .header("User-Agent", "ART-VPN/0.3 Android")
+                .header("Accept", "text/plain,*/*")
+                .build()
+            val call = client.newCall(request)
+            continuation.invokeOnCancellation { call.cancel() }
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: java.io.IOException) {
+                    if (continuation.isActive) continuation.resume(emptyList())
+                }
+
+                override fun onResponse(call: Call, response: Response) {
+                    val parsed = runCatching {
+                        response.use {
+                            if (!it.isSuccessful) return@use emptyList()
+                            val body = it.body ?: return@use emptyList()
+                            if (body.contentLength() > MAX_SUBSCRIPTION_BYTES) return@use emptyList()
+                            val bytes = body.bytes()
+                            if (bytes.size > MAX_SUBSCRIPTION_BYTES) return@use emptyList()
+                            extractVless(bytes.toString(Charsets.UTF_8))
+                                .mapNotNull(::parseVless)
+                                .distinctBy { node -> node.id }
+                                .toList()
+                        }
+                    }.getOrDefault(emptyList())
+                    if (continuation.isActive) continuation.resume(parsed)
+                }
+            })
+        }
+
     private fun sourceUrls(path: String): List<String> {
-        val encodedPath = path
-        val bitbucket = "https://bitbucket.org/igareck/vpn-configs-for-russia/raw/main/$encodedPath"
+        val bitbucket = "https://bitbucket.org/igareck/vpn-configs-for-russia/raw/main/$path"
         return listOf(
             "https://translate.yandex.ru/translate?url=$bitbucket&lang=de-de",
-            "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/$encodedPath",
-            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/$encodedPath",
-            "https://codeberg.org/igareck/vpn-configs-for-russia/raw/branch/main/$encodedPath",
-            "https://gitea.com/igareck/vpn-configs-for-russia/raw/branch/main/$encodedPath",
+            "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/$path",
+            "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/$path",
+            "https://codeberg.org/igareck/vpn-configs-for-russia/raw/branch/main/$path",
+            "https://gitea.com/igareck/vpn-configs-for-russia/raw/branch/main/$path",
             bitbucket,
-            "https://raw.githack.com/igareck/vpn-configs-for-russia/main/$encodedPath"
+            "https://raw.githack.com/igareck/vpn-configs-for-russia/main/$path"
         )
     }
 
@@ -136,8 +190,6 @@ class NodeRepository(context: Context) {
 
             val params = query(uri.rawQuery.orEmpty())
             val transport = params["type"].orEmpty().lowercase()
-            // Official sing-box 1.14.x does not implement XHTTP. Do not show
-            // these entries as selectable servers: TCP-open is not proxy-ready.
             require(transport in SUPPORTED_TRANSPORTS) {
                 "Unsupported VLESS transport: $transport"
             }
@@ -204,7 +256,8 @@ class NodeRepository(context: Context) {
         listOf(
             node.id, node.name, node.host, node.port.toString(), node.shareLink, node.country,
             node.pingMs?.toString().orEmpty(), node.reachable.toString(),
-            node.measuredMbps?.toString().orEmpty(), node.lastSuccessAt?.toString().orEmpty()
+            node.measuredMbps?.toString().orEmpty(), node.lastSuccessAt?.toString().orEmpty(),
+            node.lastFailureAt?.toString().orEmpty(), node.failureCount.toString()
         ).joinToString("\t") {
             android.util.Base64.encodeToString(it.toByteArray(), android.util.Base64.NO_WRAP)
         }
@@ -221,13 +274,16 @@ class NodeRepository(context: Context) {
                 pingMs = fields.getOrNull(6)?.toLongOrNull(),
                 reachable = fields.getOrNull(7)?.toBooleanStrictOrNull() ?: false,
                 measuredMbps = fields.getOrNull(8)?.toDoubleOrNull(),
-                lastSuccessAt = fields.getOrNull(9)?.toLongOrNull()
+                lastSuccessAt = fields.getOrNull(9)?.toLongOrNull(),
+                lastFailureAt = fields.getOrNull(10)?.toLongOrNull(),
+                failureCount = fields.getOrNull(11)?.toIntOrNull() ?: 0
             )
         }.getOrNull()
     }.toList()
 
     companion object {
-        private const val MAX_SUBSCRIPTION_BYTES = 4 * 1024 * 1024
+        private const val MAX_SUBSCRIPTION_BYTES = 4 * 1024 * 1024L
+        private const val MIRROR_RACE_TIMEOUT_MS = 7_500L
         private val SUPPORTED_TRANSPORTS = setOf("", "tcp", "ws", "grpc", "http", "httpupgrade")
         private val SUPPORTED_SECURITY = setOf("", "none", "tls", "reality")
     }
