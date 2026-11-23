@@ -74,6 +74,7 @@ class NodeRepository(context: Context) {
                     parsedForPath = extractVless(body)
                         .mapNotNull(::parseVless)
                         .distinctBy { it.id }
+                        .toList()
                     if (parsedForPath.isNotEmpty()) break
                     lastError = IllegalStateException("No supported VLESS nodes")
                 } catch (e: Exception) {
@@ -117,7 +118,7 @@ class NodeRepository(context: Context) {
 
     private fun extractVless(content: String): Sequence<String> {
         val htmlSafe = content.replace("&amp;", "&")
-        val regex = Regex("(?i)vless://[^\\s\\"'<>]+")
+        val regex = Regex("""(?i)vless://[^\s"'<>]+""")
         return regex.findAll(htmlSafe).map { match ->
             match.value.trimEnd(',', ';', ')', ']', '.')
         }
