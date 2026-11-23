@@ -109,8 +109,16 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private fun updateNotification(text: String) {
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
     }
+    override fun onCreate() {
+        super.onCreate()
+        VpnSocketProtector.install { socket -> protect(socket) }
+    }
     override fun onRevoke() { stopTunnel(); super.onRevoke() }
-    override fun onDestroy() { scope.cancel(); super.onDestroy() }
+    override fun onDestroy() {
+        VpnSocketProtector.uninstall()
+        scope.cancel()
+        super.onDestroy()
+    }
 
     override fun openTun(options: TunOptions): Int {
         val builder = Builder().setSession("ART VPN").setMtu(options.mtu.coerceIn(1280, 1500))
