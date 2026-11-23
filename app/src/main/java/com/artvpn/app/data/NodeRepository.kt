@@ -246,27 +246,27 @@ class NodeRepository(context: Context) {
             .joinToString("") { "%02x".format(it) }
 
     /**
-     * Carrier outcomes stay local. A failure on one operator must not poison
+     * Network outcomes stay local. A failure on one operator must not poison
      * a server for every other operator; two recent failures are needed before
      * it is temporarily pushed down the list.
      */
-    fun rankForOperator(nodes: List<VpnNode>, operatorKey: String?): List<VpnNode> {
-        if (operatorKey.isNullOrBlank()) return nodes.sortedWith(NodeTester.priorityComparator())
-        val histories = nodes.associate { it.id to readOperatorHistory(operatorKey, it.shareLink) }
+    fun rankForNetwork(nodes: List<VpnNode>, networkKey: String?): List<VpnNode> {
+        if (networkKey.isNullOrBlank()) return nodes.sortedWith(NodeTester.priorityComparator())
+        val histories = nodes.associate { it.id to readNetworkHistory(networkKey, it.shareLink) }
         val now = System.currentTimeMillis()
         val base = NodeTester.priorityComparator()
         return nodes.sortedWith(Comparator { first, second ->
-            val a = histories[first.id] ?: OperatorHistory()
-            val b = histories[second.id] ?: OperatorHistory()
-            val aPenalty = if (a.failureCount >= OPERATOR_FAILURE_THRESHOLD &&
-                now - a.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
-            val bPenalty = if (b.failureCount >= OPERATOR_FAILURE_THRESHOLD &&
-                now - b.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
+            val a = histories[first.id] ?: NetworkHistory()
+            val b = histories[second.id] ?: NetworkHistory()
+            val aPenalty = if (a.failureCount >= NETWORK_FAILURE_THRESHOLD &&
+                now - a.lastFailureAt < NETWORK_FAILURE_COOLDOWN_MS) 1 else 0
+            val bPenalty = if (b.failureCount >= NETWORK_FAILURE_THRESHOLD &&
+                now - b.lastFailureAt < NETWORK_FAILURE_COOLDOWN_MS) 1 else 0
             val aSuccess = a.lastSuccessAt.takeIf {
-                it > a.lastFailureAt && now - it < OPERATOR_SUCCESS_TTL_MS
+                it > a.lastFailureAt && now - it < NETWORK_SUCCESS_TTL_MS
             } ?: 0L
             val bSuccess = b.lastSuccessAt.takeIf {
-                it > b.lastFailureAt && now - it < OPERATOR_SUCCESS_TTL_MS
+                it > b.lastFailureAt && now - it < NETWORK_SUCCESS_TTL_MS
             } ?: 0L
             val penaltyCompare = aPenalty.compareTo(bPenalty)
             if (penaltyCompare != 0) penaltyCompare else {
@@ -276,26 +276,26 @@ class NodeRepository(context: Context) {
         })
     }
 
-    fun hasRecentOperatorSuccess(link: String, operatorKey: String?, maxAgeMs: Long): Boolean {
-        if (operatorKey.isNullOrBlank()) return false
-        val history = readOperatorHistory(operatorKey, link)
+    fun hasRecentNetworkSuccess(link: String, networkKey: String?, maxAgeMs: Long): Boolean {
+        if (networkKey.isNullOrBlank()) return false
+        val history = readNetworkHistory(networkKey, link)
         return history.lastSuccessAt > history.lastFailureAt &&
             System.currentTimeMillis() - history.lastSuccessAt < maxAgeMs
     }
 
-    private fun readOperatorHistory(operatorKey: String, link: String): OperatorHistory {
-        val fields = prefs.getString(operatorHistoryKey(operatorKey, link), null)?.split('|').orEmpty()
-        return OperatorHistory(
+    private fun readNetworkHistory(networkKey: String, link: String): NetworkHistory {
+        val fields = prefs.getString(networkHistoryKey(networkKey, link), null)?.split('|').orEmpty()
+        return NetworkHistory(
             lastSuccessAt = fields.getOrNull(0)?.toLongOrNull() ?: 0L,
             lastFailureAt = fields.getOrNull(1)?.toLongOrNull() ?: 0L,
             failureCount = fields.getOrNull(2)?.toIntOrNull() ?: 0
         )
     }
 
-    private fun operatorHistoryKey(operatorKey: String, link: String): String =
-        "operator_${sha256(operatorKey).take(16)}_${sha256(link).take(24)}"
+    private fun networkHistoryKey(networkKey: String, link: String): String =
+        "network_${sha256(networkKey).take(16)}_${sha256(link).take(24)}"
 
-    fun markSuccessful(link: String, operatorKey: String? = null) {
+    fun markSuccessful(link: String, networkKey: String? = null) {
         val now = System.currentTimeMillis()
         save(cached().map { node ->
             if (node.shareLink == link) node.copy(
@@ -304,13 +304,13 @@ class NodeRepository(context: Context) {
                 failureCount = 0
             ) else node
         })
-        if (!operatorKey.isNullOrBlank()) {
-            prefs.edit().putString(operatorHistoryKey(operatorKey, link), "$now|0|0").apply()
+        if (!networkKey.isNullOrBlank()) {
+            prefs.edit().putString(networkHistoryKey(networkKey, link), "$now|0|0").apply()
         }
     }
 
-    fun markFailed(link: String, operatorKey: String? = null) {
-        if (operatorKey.isNullOrBlank()) {
+    fun markFailed(link: String, networkKey: String? = null) {
+        if (networkKey.isNullOrBlank()) {
             val now = System.currentTimeMillis()
             save(cached().map { node ->
                 if (node.shareLink == link) node.copy(
@@ -320,16 +320,16 @@ class NodeRepository(context: Context) {
             })
             return
         }
-        val old = readOperatorHistory(operatorKey, link)
+        val old = readNetworkHistory(networkKey, link)
         val now = System.currentTimeMillis()
         val failures = (old.failureCount + 1).coerceAtMost(20)
         prefs.edit().putString(
-            operatorHistoryKey(operatorKey, link),
+            networkHistoryKey(networkKey, link),
             "${old.lastSuccessAt}|$now|$failures"
         ).apply()
     }
 
-    private data class OperatorHistory(
+    private data class NetworkHistory(
         val lastSuccessAt: Long = 0L,
         val lastFailureAt: Long = 0L,
         val failureCount: Int = 0
@@ -367,9 +367,9 @@ class NodeRepository(context: Context) {
     companion object {
         private const val MAX_SUBSCRIPTION_BYTES = 4 * 1024 * 1024L
         private const val MIRROR_RACE_TIMEOUT_MS = 7_500L
-        private const val OPERATOR_FAILURE_THRESHOLD = 2
-        private const val OPERATOR_FAILURE_COOLDOWN_MS = 30L * 60 * 1000
-        private const val OPERATOR_SUCCESS_TTL_MS = 7L * 24 * 60 * 60 * 1000
+        private const val NETWORK_FAILURE_THRESHOLD = 2
+        private const val NETWORK_FAILURE_COOLDOWN_MS = 30L * 60 * 1000
+        private const val NETWORK_SUCCESS_TTL_MS = 7L * 24 * 60 * 60 * 1000
         private val UUID_PATTERN = Regex(
             "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         )
