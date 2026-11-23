@@ -1,4 +1,5 @@
 package com.artvpn.app.data
+
 data class VpnNode(
     val id: String,
     val name: String,
@@ -10,6 +11,7 @@ data class VpnNode(
     val pingMs: Long? = null,
     val reachable: Boolean = false,
     val measuredMbps: Double? = null,
+    val lastSuccessAt: Long? = null,
 ) {
     val pingLabel: String get() = pingMs?.let { "$it мс" } ?: "—"
     val countryLabel: String get() = country.ifBlank { "Страна неизвестна" }
