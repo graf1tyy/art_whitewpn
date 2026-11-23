@@ -90,8 +90,14 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 val ordered = allNodes.sortedWith(NodeTester.priorityComparator())
                 val now = System.currentTimeMillis()
                 val preferred = repository.selectedLink()?.let { link ->
-                    ordered.firstOrNull { it.shareLink == link }?.takeUnless { node ->
-                        node.lastFailureAt?.let { now - it < FAILURE_COOLDOWN_MS } == true
+                    ordered.firstOrNull { it.shareLink == link }?.takeIf { node ->
+                        val recentlySucceeded = node.lastSuccessAt?.let {
+                            now - it < PREFERRED_SUCCESS_TTL_MS
+                        } == true
+                        val recentlyFailed = node.lastFailureAt?.let {
+                            now - it < FAILURE_COOLDOWN_MS
+                        } == true
+                        recentlySucceeded && !recentlyFailed
                     }
                 }
                 val candidates = (listOfNotNull(preferred) + ordered)
@@ -361,6 +367,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val NOTIFICATION_ID = 41
         private const val MAX_CONNECTION_CANDIDATES = 5
         private const val HEALTH_PROBE_TIMEOUT_MS = 3200L
+        private const val PREFERRED_SUCCESS_TTL_MS = 12L * 60 * 60 * 1000
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
         fun start(context: android.content.Context) {
