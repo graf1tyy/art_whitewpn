@@ -266,7 +266,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onDestroy() {
         VpnSocketProtector.uninstall()
-        if (networkMonitorDelegate.isInitialized()) runCatching { networkMonitor.stop() }
+        if (networkMonitorDelegate.isInitialized()) runCatching { networkMonitor.close() }
         scope.cancel()
         super.onDestroy()
     }
