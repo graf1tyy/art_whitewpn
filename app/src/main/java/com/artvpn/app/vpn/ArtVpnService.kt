@@ -88,14 +88,14 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             try {
                 val repository = NodeRepository(this@ArtVpnService)
                 val allNodes = repository.cached()
-                val operatorKey = NetworkProfile.activeNetworkProfile(this@ArtVpnService)
-                val ordered = repository.rankForOperator(allNodes, operatorKey)
+                val networkKey = NetworkProfile.activeNetworkProfile(this@ArtVpnService)
+                val ordered = repository.rankForNetwork(allNodes, networkKey)
                 val now = System.currentTimeMillis()
                 val preferred = repository.selectedLink()?.let { link ->
                     ordered.firstOrNull { it.shareLink == link }?.takeIf { node ->
-                        if (!operatorKey.isNullOrBlank()) {
-                            repository.hasRecentOperatorSuccess(
-                                node.shareLink, operatorKey, PREFERRED_SUCCESS_TTL_MS
+                        if (!networkKey.isNullOrBlank()) {
+                            repository.hasRecentNetworkSuccess(
+                                node.shareLink, networkKey, PREFERRED_SUCCESS_TTL_MS
                             )
                         } else {
                             val recentlySucceeded = node.lastSuccessAt?.let {
@@ -132,7 +132,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
                         if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
-                            repository.markSuccessful(node.shareLink, operatorKey)
+                            repository.markSuccessful(node.shareLink, networkKey)
                             updateNotification("VPN подключён")
                             sendStatus(
                                 ACTION_CONNECTED,
@@ -141,12 +141,12 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                             return@launch
                         }
 
-                        repository.markFailed(node.shareLink, operatorKey)
+                        repository.markFailed(node.shareLink, networkKey)
                         lastFailure = "Сервер не пропустил интернет-трафик"
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (e: Exception) {
-                        repository.markFailed(node.shareLink, operatorKey)
+                        repository.markFailed(node.shareLink, networkKey)
                         lastFailure = e.message ?: "Сервер не ответил"
                     }
                 }
