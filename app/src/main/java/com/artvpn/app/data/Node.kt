@@ -12,6 +12,8 @@ data class VpnNode(
     val reachable: Boolean = false,
     val measuredMbps: Double? = null,
     val lastSuccessAt: Long? = null,
+    val lastFailureAt: Long? = null,
+    val failureCount: Int = 0,
 ) {
     val pingLabel: String get() = pingMs?.let { "$it мс" } ?: "—"
     val countryLabel: String get() = country.ifBlank { "Страна неизвестна" }
