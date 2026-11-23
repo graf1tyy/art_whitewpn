@@ -286,8 +286,9 @@ class NodeRepository(context: Context) {
 
     fun hasRecentOperatorSuccess(link: String, operatorKey: String?, maxAgeMs: Long): Boolean {
         if (operatorKey.isNullOrBlank()) return false
-        val successAt = readOperatorHistory(operatorKey, link).lastSuccessAt
-        return successAt > 0L && System.currentTimeMillis() - successAt < maxAgeMs
+        val history = readOperatorHistory(operatorKey, link)
+        return history.lastSuccessAt > history.lastFailureAt &&
+            System.currentTimeMillis() - history.lastSuccessAt < maxAgeMs
     }
 
     private fun readOperatorHistory(operatorKey: String, link: String): OperatorHistory {
@@ -300,7 +301,7 @@ class NodeRepository(context: Context) {
     }
 
     private fun operatorHistoryKey(operatorKey: String, link: String): String =
-        "operator_\${sha256(operatorKey).take(16)}_\${sha256(link).take(24)}"
+        "operator_${sha256(operatorKey).take(16)}_${sha256(link).take(24)}"
 
     fun markSuccessful(link: String, operatorKey: String? = null) {
         val now = System.currentTimeMillis()
@@ -332,7 +333,7 @@ class NodeRepository(context: Context) {
         val failures = (old.failureCount + 1).coerceAtMost(20)
         prefs.edit().putString(
             operatorHistoryKey(operatorKey, link),
-            "\${old.lastSuccessAt}|$now|$failures"
+            "${old.lastSuccessAt}|$now|$failures"
         ).apply()
     }
 
@@ -377,7 +378,7 @@ class NodeRepository(context: Context) {
         private const val OPERATOR_FAILURE_THRESHOLD = 2
         private const val OPERATOR_FAILURE_COOLDOWN_MS = 30L * 60 * 1000
         private val UUID_PATTERN = Regex(
-            "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+            "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         )
         private val SUPPORTED_TRANSPORTS = setOf("", "tcp", "ws", "grpc", "http", "httpupgrade")
         private val SUPPORTED_SECURITY = setOf("", "none", "tls", "reality")
