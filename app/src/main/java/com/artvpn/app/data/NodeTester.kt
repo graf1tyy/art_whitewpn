@@ -56,7 +56,7 @@ object NodeTester {
                 now - failedAt < FAILURE_COOLDOWN_MS
             } == true
             if (failedRecently) 1 else 0
-        }.thenByDescending { it.lastSuccessAt ?: 0L }
+        }.thenByDescending { it.lastSuccessAt?.takeIf { succeededAt -> now - succeededAt < SUCCESS_TTL_MS } ?: 0L }
             .thenBy { !it.reachable }
             .thenBy { it.pingMs ?: Long.MAX_VALUE }
             .thenBy { it.failureCount }
@@ -66,4 +66,5 @@ object NodeTester {
     private const val MAX_PARALLEL_PROBES = 24
     private const val CONNECT_TIMEOUT_MS = 1_800
     private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
+    private const val SUCCESS_TTL_MS = 24L * 60 * 60 * 1000
 }
