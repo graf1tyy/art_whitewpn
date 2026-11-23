@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
 import com.artvpn.app.data.NodeRepository
+import com.artvpn.app.data.NodeTester
 import com.artvpn.app.data.VpnNode
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
@@ -32,22 +33,38 @@ import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
 import io.nekohasekai.libbox.TunOptions
 import io.nekohasekai.libbox.WIFIState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.NetworkInterface
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var commandServer: CommandServer? = null
     private var tunnel: ParcelFileDescriptor? = null
+    private var connectionJob: Job? = null
+
+    private val healthClient by lazy {
+        OkHttpClient.Builder()
+            .proxy(Proxy.NO_PROXY)
+            .connectTimeout(2, TimeUnit.SECONDS)
+            .readTimeout(2, TimeUnit.SECONDS)
+            .callTimeout(2800, TimeUnit.MILLISECONDS)
+            .retryOnConnectionFailure(false)
+            .build()
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -58,102 +75,122 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     private fun startTunnel() {
-        if (commandServer != null) return
+        if (connectionJob?.isActive == true || commandServer != null) return
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, notification("Подбираем рабочий сервер…"))
-        scope.launch {
+        startForeground(NOTIFICATION_ID, notification("Автоматически подбираем сервер…"))
+        sendStatus(ACTION_CONNECTING, "Подбираем лучший сервер…")
+
+        connectionJob = scope.launch {
             try {
                 val repository = NodeRepository(this@ArtVpnService)
-                val savedLink = repository.selectedLink()
                 val allNodes = repository.cached()
-                val preferred = allNodes.firstOrNull { it.shareLink == savedLink }
-                val candidates = (listOfNotNull(preferred) + allNodes
-                    .sortedWith(
-                        compareByDescending<VpnNode> { it.lastSuccessAt ?: 0L }
-                            .thenBy { !it.reachable }
-                            .thenBy { it.pingMs ?: Long.MAX_VALUE }
-                    ))
+                val ordered = allNodes.sortedWith(NodeTester.priorityComparator())
+                val now = System.currentTimeMillis()
+                val preferred = repository.selectedLink()?.let { link ->
+                    ordered.firstOrNull { it.shareLink == link }?.takeUnless { node ->
+                        node.lastFailureAt?.let { now - it < FAILURE_COOLDOWN_MS } == true
+                    }
+                }
+                val candidates = (listOfNotNull(preferred) + ordered)
                     .distinctBy { it.id }
                     .take(MAX_CONNECTION_CANDIDATES)
+
                 check(candidates.isNotEmpty()) {
-                    "Нет совместимых серверов. Обновите список перед подключением."
+                    "Нет серверов для подключения. Сначала обновите список."
                 }
 
                 val server = CommandServer(this@ArtVpnService, this@ArtVpnService)
                 server.start()
                 commandServer = server
 
-                var lastFailure = "Проверка интернет-трафика не прошла"
+                var lastFailure = "Сайты не ответили через VPN"
                 for ((index, node) in candidates.withIndex()) {
-                    updateNotification("Проверяем сервер ${index + 1}/${candidates.size} · ${node.countryLabel}")
+                    val progress = "Проверяем сервер ${index + 1} из ${candidates.size}"
+                    updateNotification(progress)
+                    sendStatus(ACTION_CONNECTING, progress)
                     try {
                         val config = VpnConfigCompiler.compile(node)
                         server.startOrReloadService(config, OverrideOptions())
-                        // Let sing-box establish its outbound and DNS before the HTTP probe.
-                        delay(1300)
-                        val reachableUrl = verifyTrafficThroughTunnel()
-                        if (reachableUrl != null) {
+                        delay(350)
+
+                        if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
                             repository.markSuccessful(node.shareLink)
-                            updateNotification("Подключено · ${node.countryLabel}")
+                            updateNotification("VPN подключён")
                             sendStatus(
                                 ACTION_CONNECTED,
-                                "Подключено · ${node.countryLabel} · VPN-трафик проверен"
+                                "Подключено · ${node.countryLabel}"
                             )
                             return@launch
                         }
-                        lastFailure = "Туннель запустился, но сайты не открылись"
+
+                        repository.markFailed(node.shareLink)
+                        lastFailure = "Сервер не пропустил интернет-трафик"
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
                     } catch (e: Exception) {
-                        lastFailure = e.message ?: "Ошибка конфигурации или соединения"
+                        repository.markFailed(node.shareLink)
+                        lastFailure = e.message ?: "Сервер не ответил"
                     }
                 }
-                error("Не найден рабочий сервер: проверено ${candidates.size}. $lastFailure")
+                throw IllegalStateException(
+                    "Не удалось подключиться. Проверено серверов: ${candidates.size}. $lastFailure"
+                )
+            } catch (cancelled: CancellationException) {
+                closeTunnel(notifyDisconnected = false)
             } catch (e: Exception) {
                 sendStatus(ACTION_FAILED, e.message ?: "Не удалось подключиться")
-                stopTunnel()
+                closeTunnel(notifyDisconnected = false)
             }
         }
     }
 
     /**
-     * Run a real HTTPS request from the app process while it is inside the VPN.
-     * A TCP-open server is not accepted until at least one request succeeds
-     * through the active TUN/sing-box path.
+     * Probe several independent HTTPS endpoints at the same time. The first
+     * successful response proves that packets are actually passing the TUN;
+     * a TCP-open node alone is never reported as connected.
      */
-    private fun verifyTrafficThroughTunnel(): String? {
-        val client = OkHttpClient.Builder()
-            .proxy(Proxy.NO_PROXY)
-            .connectTimeout(1800, TimeUnit.MILLISECONDS)
-            .readTimeout(1800, TimeUnit.MILLISECONDS)
-            .callTimeout(3000, TimeUnit.MILLISECONDS)
-            .retryOnConnectionFailure(false)
-            .build()
+    private suspend fun verifyTrafficThroughTunnel(): String? {
         val probes = listOf(
             "https://cp.cloudflare.com/generate_204",
             "https://www.google.com/generate_204",
             "https://yandex.ru/robots.txt"
         )
-        for (baseUrl in probes) {
-            val url = "$baseUrl?artvpn_check=${System.currentTimeMillis()}"
-            try {
-                val request = Request.Builder()
-                    .url(url)
-                    .header("Cache-Control", "no-cache, no-store")
-                    .header("User-Agent", "ART-VPN-HealthCheck/0.2")
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    if (response.isSuccessful || response.code in 300..399) {
-                        return baseUrl
+        val result = CompletableDeferred<String?>()
+        val remaining = AtomicInteger(probes.size)
+        val jobs = probes.map { baseUrl ->
+            scope.launch(Dispatchers.IO) {
+                try {
+                    val url = "$baseUrl?artvpn_check=${System.currentTimeMillis()}"
+                    val request = Request.Builder()
+                        .url(url)
+                        .header("Cache-Control", "no-cache, no-store")
+                        .header("User-Agent", "ART-VPN-HealthCheck/0.3")
+                        .build()
+                    healthClient.newCall(request).execute().use { response ->
+                        if (response.isSuccessful || response.code in 300..399) {
+                            result.complete(baseUrl)
+                        }
                     }
+                } catch (_: Exception) {
+                    // Other HTTPS endpoints are tested concurrently.
+                } finally {
+                    if (remaining.decrementAndGet() == 0) result.complete(null)
                 }
-            } catch (_: Exception) {
-                // Try the next independent HTTPS endpoint.
             }
         }
-        return null
+
+        val winner = withTimeoutOrNull(HEALTH_PROBE_TIMEOUT_MS) { result.await() }
+        jobs.forEach { it.cancel() }
+        return winner
     }
 
     private fun stopTunnel() {
+        connectionJob?.cancel()
+        closeTunnel(notifyDisconnected = true)
+    }
+
+    private fun closeTunnel(notifyDisconnected: Boolean) {
         scope.launch {
             runCatching { commandServer?.closeService() }
             runCatching { commandServer?.close() }
@@ -161,8 +198,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             runCatching { tunnel?.close() }
             tunnel = null
             stopForeground(STOP_FOREGROUND_REMOVE)
+            if (notifyDisconnected) sendStatus(ACTION_DISCONNECTED, "VPN отключён")
             stopSelf()
-            sendStatus(ACTION_DISCONNECTED, "Отключено")
         }
     }
 
@@ -310,13 +347,17 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     companion object {
         const val ACTION_START = "com.artvpn.app.START"
         const val ACTION_STOP = "com.artvpn.app.STOP"
+        const val ACTION_CONNECTING = "com.artvpn.app.CONNECTING"
         const val ACTION_CONNECTED = "com.artvpn.app.CONNECTED"
         const val ACTION_DISCONNECTED = "com.artvpn.app.DISCONNECTED"
         const val ACTION_FAILED = "com.artvpn.app.FAILED"
         const val EXTRA_MESSAGE = "message"
         private const val CHANNEL_ID = "artvpn-vpn"
         private const val NOTIFICATION_ID = 41
-        private const val MAX_CONNECTION_CANDIDATES = 8
+        private const val MAX_CONNECTION_CANDIDATES = 5
+        private const val HEALTH_PROBE_TIMEOUT_MS = 3200L
+        private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
+        private const val FAILURE_HISTORY_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
         fun start(context: android.content.Context) {
             androidx.core.content.ContextCompat.startForegroundService(
