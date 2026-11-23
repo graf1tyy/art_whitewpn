@@ -7,6 +7,8 @@
     <application
         android:name=".ArtVpnApplication"
         android:allowBackup="false"
+        android:icon="@drawable/ic_vpn"
+        android:roundIcon="@drawable/ic_vpn"
         android:label="ART VPN"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
