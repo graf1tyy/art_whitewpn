@@ -87,17 +87,24 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             try {
                 val repository = NodeRepository(this@ArtVpnService)
                 val allNodes = repository.cached()
-                val ordered = allNodes.sortedWith(NodeTester.priorityComparator())
+                val operatorKey = NetworkProfile.activeCellularOperator(this@ArtVpnService)
+                val ordered = repository.rankForOperator(allNodes, operatorKey)
                 val now = System.currentTimeMillis()
                 val preferred = repository.selectedLink()?.let { link ->
                     ordered.firstOrNull { it.shareLink == link }?.takeIf { node ->
-                        val recentlySucceeded = node.lastSuccessAt?.let {
-                            now - it < PREFERRED_SUCCESS_TTL_MS
-                        } == true
-                        val recentlyFailed = node.lastFailureAt?.let {
-                            now - it < FAILURE_COOLDOWN_MS
-                        } == true
-                        recentlySucceeded && !recentlyFailed
+                        if (!operatorKey.isNullOrBlank()) {
+                            repository.hasRecentOperatorSuccess(
+                                node.shareLink, operatorKey, PREFERRED_SUCCESS_TTL_MS
+                            )
+                        } else {
+                            val recentlySucceeded = node.lastSuccessAt?.let {
+                                now - it < PREFERRED_SUCCESS_TTL_MS
+                            } == true
+                            val recentlyFailed = node.lastFailureAt?.let {
+                                now - it < FAILURE_COOLDOWN_MS
+                            } == true
+                            recentlySucceeded && !recentlyFailed
+                        }
                     }
                 }
                 val candidates = (listOfNotNull(preferred) + ordered)
@@ -124,7 +131,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
                         if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
-                            repository.markSuccessful(node.shareLink)
+                            repository.markSuccessful(node.shareLink, operatorKey)
                             updateNotification("VPN подключён")
                             sendStatus(
                                 ACTION_CONNECTED,
@@ -133,7 +140,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                             return@launch
                         }
 
-                        repository.markFailed(node.shareLink)
+                        repository.markFailed(node.shareLink, operatorKey)
                         lastFailure = "Сервер не пропустил интернет-трафик"
                     } catch (cancelled: CancellationException) {
                         throw cancelled
