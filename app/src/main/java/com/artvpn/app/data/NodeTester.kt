@@ -49,18 +49,13 @@ object NodeTester {
         nodes.map { byId[it.id] ?: it }.sortedWith(priorityComparator())
     }
 
-    fun priorityComparator(): Comparator<VpnNode> {
-        val now = System.currentTimeMillis()
-        // Failures are ranked in a per-network history by NodeRepository.
-        // Global failures from one carrier must not suppress a node on another.
-        return compareByDescending<VpnNode> {
-            it.lastSuccessAt?.takeIf { succeededAt -> now - succeededAt < SUCCESS_TTL_MS } ?: 0L
-        }.thenBy { !it.reachable }
+    fun priorityComparator(): Comparator<VpnNode> =
+        // Connection success is network-specific and ranked by NodeRepository.
+        // This comparator only orders physical TCP reachability and measured ping.
+        compareBy<VpnNode> { !it.reachable }
             .thenBy { it.pingMs ?: Long.MAX_VALUE }
-    }
 
     private const val MAX_TCP_PROBES = 24
     private const val MAX_PARALLEL_PROBES = 12
     private const val CONNECT_TIMEOUT_MS = 1_200
-    private const val SUCCESS_TTL_MS = 24L * 60 * 60 * 1000
 }
