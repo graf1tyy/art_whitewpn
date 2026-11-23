@@ -12,8 +12,6 @@ import androidx.core.app.NotificationCompat
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
 import com.artvpn.app.data.NodeRepository
-import io.nekohasekai.libbox.AutoRedirectHandler
-import io.nekohasekai.libbox.AutoRedirectSession
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
 import io.nekohasekai.libbox.CommandServer
@@ -164,9 +162,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun tailscaleHostname(): String = "artvpn-android"
     override fun usePlatformBridge(): Boolean = false
     override fun createBridge(options: BridgeOptions?): BridgeSession = error("Bridge is not supported")
-    override fun usePlatformAutoRedirect(): Boolean = false
-    override fun createAutoRedirect(options: ByteArray?, handler: AutoRedirectHandler?): AutoRedirectSession =
-        error("Auto redirect is not supported")
     override fun lookupUser(username: String?): PlatformUser = error("User lookup is not supported")
     override fun registerMyInterface(name: String?) = Unit
 
@@ -192,7 +187,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 type = Libbox.InterfaceTypeOther
                 addresses = StringList(item.interfaceAddresses.map { "${it.address.hostAddress}/${it.networkPrefixLength}" })
                 dnsServer = StringList(emptyList())
-                dnsSearchDomain = StringList(emptyList())
                 gateway = StringList(emptyList())
             }
         }
