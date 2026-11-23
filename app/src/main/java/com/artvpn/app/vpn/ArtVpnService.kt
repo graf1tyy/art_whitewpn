@@ -146,7 +146,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (e: Exception) {
-                        repository.markFailed(node.shareLink)
+                        repository.markFailed(node.shareLink, operatorKey)
                         lastFailure = e.message ?: "Сервер не ответил"
                     }
                 }
