@@ -124,7 +124,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         }
         if (options.autoRoute) {
             builder.addRoute("0.0.0.0", 0)
-            builder.addRoute("::", 0)
         }
         val descriptor = builder.establish() ?: error("Android не разрешил создать VPN-туннель")
         tunnel = descriptor
