@@ -1,0 +1,6 @@
+ART VPN application code is licensed under the GNU General Public License v3.0 or later.
+
+This project includes and relies on sing-box/libbox, which is licensed under GPL-3.0. See THIRD_PARTY_NOTICES.md for upstream project references.
+
+The complete text of GPL-3.0 is available at:
+https://www.gnu.org/licenses/gpl-3.0.txt
