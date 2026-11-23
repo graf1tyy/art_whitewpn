@@ -88,7 +88,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             try {
                 val repository = NodeRepository(this@ArtVpnService)
                 val allNodes = repository.cached()
-                val operatorKey = NetworkProfile.activeCellularOperator(this@ArtVpnService)
+                val operatorKey = NetworkProfile.activeNetworkProfile(this@ArtVpnService)
                 val ordered = repository.rankForOperator(allNodes, operatorKey)
                 val now = System.currentTimeMillis()
                 val preferred = repository.selectedLink()?.let { link ->
