@@ -7,6 +7,8 @@ import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 class NodeRepository(context: Context) {
     private val prefs = context.getSharedPreferences("artvpn", Context.MODE_PRIVATE)
@@ -19,7 +21,7 @@ class NodeRepository(context: Context) {
     fun saveSelected(link: String) { prefs.edit().putString("selected_link", link).apply() }
     fun selectedLink(): String? = prefs.getString("selected_link", null)
 
-    suspend fun refresh(): List<VpnNode> {
+    suspend fun refresh(): List<VpnNode> = withContext(Dispatchers.IO) {
         val sources = listOf(
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
             "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -37,7 +39,7 @@ class NodeRepository(context: Context) {
             val parsed = body.lineSequence().mapNotNull(::parseVless).distinctBy { it.id }.toList()
             check(parsed.isNotEmpty()) { "No supported VLESS nodes in subscription" }
             save(parsed)
-            return parsed
+            return@withContext parsed
         } catch (e: Exception) { lastError = e }
         throw lastError ?: IllegalStateException("No subscription sources available")
     }
