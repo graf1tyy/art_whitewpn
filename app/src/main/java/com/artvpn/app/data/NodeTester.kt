@@ -51,20 +51,16 @@ object NodeTester {
 
     fun priorityComparator(): Comparator<VpnNode> {
         val now = System.currentTimeMillis()
-        return compareBy<VpnNode> {
-            val failedRecently = it.lastFailureAt?.let { failedAt ->
-                now - failedAt < FAILURE_COOLDOWN_MS
-            } == true
-            if (failedRecently) 1 else 0
-        }.thenByDescending { it.lastSuccessAt?.takeIf { succeededAt -> now - succeededAt < SUCCESS_TTL_MS } ?: 0L }
-            .thenBy { !it.reachable }
+        // Failures are ranked in a per-network history by NodeRepository.
+        // Global failures from one carrier must not suppress a node on another.
+        return compareByDescending<VpnNode> {
+            it.lastSuccessAt?.takeIf { succeededAt -> now - succeededAt < SUCCESS_TTL_MS } ?: 0L
+        }.thenBy { !it.reachable }
             .thenBy { it.pingMs ?: Long.MAX_VALUE }
-            .thenBy { it.failureCount }
     }
 
     private const val MAX_TCP_PROBES = 24
     private const val MAX_PARALLEL_PROBES = 12
     private const val CONNECT_TIMEOUT_MS = 1_200
-    private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
     private const val SUCCESS_TTL_MS = 24L * 60 * 60 * 1000
 }
