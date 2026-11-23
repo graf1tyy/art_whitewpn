@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = NodeRepository(this)
-        nodes = repository.rankForOperator(
+        nodes = repository.rankForNetwork(
             repository.cached(), NetworkProfile.activeNetworkProfile(this)
         )
         selectedId = bestRememberedNode(nodes)?.id
@@ -448,7 +448,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun bestRememberedNode(list: List<VpnNode>): VpnNode? =
-        repository.rankForOperator(list, NetworkProfile.activeNetworkProfile(this)).firstOrNull()
+        repository.rankForNetwork(list, NetworkProfile.activeNetworkProfile(this)).firstOrNull()
 
     private fun refreshAndTest() {
         if (busy) return
@@ -459,7 +459,7 @@ class MainActivity : ComponentActivity() {
                 val fresh = repository.refresh()
                 status = "Проверяем лучшие варианты…"
                 val tested = NodeTester.test(fresh)
-                val ranked = repository.rankForOperator(
+                val ranked = repository.rankForNetwork(
                     tested, NetworkProfile.activeNetworkProfile(this@MainActivity)
                 )
                 nodes = ranked
@@ -471,7 +471,7 @@ class MainActivity : ComponentActivity() {
             } catch (e: Exception) {
                 val cached = repository.cached()
                 if (cached.isNotEmpty()) {
-                    nodes = repository.rankForOperator(
+                    nodes = repository.rankForNetwork(
                         cached, NetworkProfile.activeNetworkProfile(this@MainActivity)
                     )
                     selectedId = nodes.firstOrNull()?.id
