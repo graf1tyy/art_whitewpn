@@ -181,6 +181,9 @@ class NodeRepository(context: Context) {
             require(security in SUPPORTED_SECURITY)
             val flow = params["flow"].orEmpty()
             require(flow in SUPPORTED_FLOWS) { "Unsupported VLESS flow: $flow" }
+            require(flow.isBlank() || security in setOf("tls", "reality")) {
+                "VLESS vision flow requires TLS or Reality"
+            }
             if (security == "reality") {
                 require(!params["pbk"].isNullOrBlank()) { "Reality public key missing" }
                 require(!params["sni"].isNullOrBlank()) { "Reality SNI missing" }
@@ -255,9 +258,15 @@ class NodeRepository(context: Context) {
                 now - a.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
             val bPenalty = if (b.failureCount >= OPERATOR_FAILURE_THRESHOLD &&
                 now - b.lastFailureAt < OPERATOR_FAILURE_COOLDOWN_MS) 1 else 0
+            val aSuccess = a.lastSuccessAt.takeIf {
+                it > a.lastFailureAt && now - it < OPERATOR_SUCCESS_TTL_MS
+            } ?: 0L
+            val bSuccess = b.lastSuccessAt.takeIf {
+                it > b.lastFailureAt && now - it < OPERATOR_SUCCESS_TTL_MS
+            } ?: 0L
             val penaltyCompare = aPenalty.compareTo(bPenalty)
             if (penaltyCompare != 0) penaltyCompare else {
-                val successCompare = b.lastSuccessAt.compareTo(a.lastSuccessAt)
+                val successCompare = bSuccess.compareTo(aSuccess)
                 if (successCompare != 0) successCompare else base.compare(first, second)
             }
         })
@@ -356,6 +365,7 @@ class NodeRepository(context: Context) {
         private const val MIRROR_RACE_TIMEOUT_MS = 7_500L
         private const val OPERATOR_FAILURE_THRESHOLD = 2
         private const val OPERATOR_FAILURE_COOLDOWN_MS = 30L * 60 * 1000
+        private const val OPERATOR_SUCCESS_TTL_MS = 7L * 24 * 60 * 60 * 1000
         private val UUID_PATTERN = Regex(
             "(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
         )
