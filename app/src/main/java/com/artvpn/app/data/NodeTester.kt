@@ -8,6 +8,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
+import com.artvpn.app.vpn.VpnSocketProtector
 
 object NodeTester {
     suspend fun test(nodes: List<VpnNode>): List<VpnNode> = withContext(Dispatchers.IO) {
