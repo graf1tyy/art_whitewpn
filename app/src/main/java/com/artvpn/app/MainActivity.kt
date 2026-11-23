@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import com.artvpn.app.data.NetworkProfile
 import com.artvpn.app.data.NodeRepository
 import com.artvpn.app.data.NodeTester
 import com.artvpn.app.data.VpnNode
@@ -123,7 +124,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = NodeRepository(this)
-        nodes = repository.cached()
+        nodes = repository.rankForOperator(
+            repository.cached(), NetworkProfile.activeCellularOperator(this)
+        )
         selectedId = bestRememberedNode(nodes)?.id
 
         ContextCompat.registerReceiver(
@@ -445,7 +448,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun bestRememberedNode(list: List<VpnNode>): VpnNode? =
-        list.sortedWith(NodeTester.priorityComparator()).firstOrNull()
+        repository.rankForOperator(list, NetworkProfile.activeCellularOperator(this)).firstOrNull()
 
     private fun refreshAndTest() {
         if (busy) return
@@ -456,17 +459,22 @@ class MainActivity : ComponentActivity() {
                 val fresh = repository.refresh()
                 status = "Проверяем лучшие варианты…"
                 val tested = NodeTester.test(fresh)
-                nodes = tested
-                repository.save(tested)
-                selectedId = bestRememberedNode(tested)?.id
+                val ranked = repository.rankForOperator(
+                    tested, NetworkProfile.activeCellularOperator(this@MainActivity)
+                )
+                nodes = ranked
+                repository.save(ranked)
+                selectedId = ranked.firstOrNull()?.id
                 status = "Серверы обновлены"
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (e: Exception) {
                 val cached = repository.cached()
                 if (cached.isNotEmpty()) {
-                    nodes = cached.sortedWith(NodeTester.priorityComparator())
-                    selectedId = bestRememberedNode(nodes)?.id
+                    nodes = repository.rankForOperator(
+                        cached, NetworkProfile.activeCellularOperator(this@MainActivity)
+                    )
+                    selectedId = nodes.firstOrNull()?.id
                     status = "Используем сохранённый список"
                 } else {
                     status = e.message ?: "Не удалось загрузить серверы"
