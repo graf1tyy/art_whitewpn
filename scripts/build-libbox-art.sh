@@ -277,7 +277,7 @@ text = text.replace(update_replacement, update_replacement + failover_helper, 1)
 assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
 assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
 assert "context.WithTimeout(ctx, 5*time.Second)" in text, "Fast VLESS dial timeout patch missing"
-assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in health_text, "Multi-endpoint URLTest deadline missing"
+assert "health_source = core / \"common/urltest/urltest.go\"" in text, "Multi-endpoint URLTest patch block missing"
 assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
@@ -340,6 +340,7 @@ new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) 
 \t}
 \treturn 0, lastError
 }"""
+assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in new_health, "Multi-endpoint URLTest deadline missing"
 assert health_text.count(old_health) == 1, "sing-box URLTest function changed; refusing unsafe patch"
 health_text = health_text.replace(old_health, new_health, 1)
 health_source.write_text(health_text)
