@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
@@ -12,6 +13,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
 import com.artvpn.app.data.NetworkProfile
@@ -61,6 +63,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private var tunnel: ParcelFileDescriptor? = null
     private var connectionJob: Job? = null
     private var closing = false
+    @Volatile private var foregroundStarted = false
     private val networkMonitorDelegate = lazy {
         DefaultNetworkMonitor(this) { underlying ->
             if (tunnel != null) {
@@ -93,14 +96,14 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             ACTION_STOP -> stopTunnel()
             else -> startTunnel()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startTunnel() {
         if (closing || connectionJob?.isActive == true || commandServer != null) return
         closing = false
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, notification("Автоматически подбираем сервер…"))
+        Log.i(TAG, "VPN service started; preparing the tunnel")
         sendStatus(ACTION_CONNECTING, "Подбираем лучший сервер…")
 
         connectionJob = scope.launch {
@@ -167,6 +170,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (e: Exception) {
+                        Log.e(TAG, "Candidate ${index + 1} failed (${node.countryLabel})", e)
                         repository.markFailed(node.shareLink, networkKey)
                         lastFailure = e.message ?: "Сервер не ответил"
                     }
@@ -177,6 +181,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             } catch (cancelled: CancellationException) {
                 closeTunnel(notifyDisconnected = false)
             } catch (e: Exception) {
+                Log.e(TAG, "VPN connection attempt failed", e)
                 sendStatus(ACTION_FAILED, e.message ?: "Не удалось подключиться")
                 closeTunnel(notifyDisconnected = false)
             }
@@ -238,7 +243,10 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             runCatching { if (networkMonitorDelegate.isInitialized()) networkMonitor.stop() }
             runCatching { tunnel?.close() }
             tunnel = null
-            stopForeground(STOP_FOREGROUND_REMOVE)
+            if (foregroundStarted) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                foregroundStarted = false
+            }
             if (notifyDisconnected) sendStatus(ACTION_DISCONNECTED, "VPN отключён")
             stopSelf()
         }
@@ -266,7 +274,23 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).build()
     }
 
+    private fun promoteToForeground(text: String) {
+        if (foregroundStarted) {
+            updateNotification(text)
+            return
+        }
+        val type = if (Build.VERSION.SDK_INT >= 34) {
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
+        } else {
+            0
+        }
+        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(text), type)
+        foregroundStarted = true
+        Log.i(TAG, "Foreground mode enabled after VPN interface establishment")
+    }
+
     private fun updateNotification(text: String) {
+        if (!foregroundStarted) return
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification(text))
     }
 
@@ -340,6 +364,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         val descriptor = builder.establish()
             ?: error("Android не разрешил создать VPN-туннель")
         tunnel = descriptor
+        // systemExempted is permitted for an active VPN, so promote only after
+        // Android has created the VPN interface, not before Builder.establish().
+        promoteToForeground("Подключаем защищённое соединение…")
         return descriptor.fd
     }
 
@@ -464,6 +491,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         const val ACTION_DISCONNECTED = "com.artvpn.app.DISCONNECTED"
         const val ACTION_FAILED = "com.artvpn.app.FAILED"
         const val EXTRA_MESSAGE = "message"
+        private const val TAG = "ARTVPN"
         private const val CHANNEL_ID = "artvpn-vpn"
         private const val NOTIFICATION_ID = 41
         private const val MAX_CONNECTION_CANDIDATES = 5
@@ -472,9 +500,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
         fun start(context: android.content.Context) {
-            androidx.core.content.ContextCompat.startForegroundService(
-                context, Intent(context, ArtVpnService::class.java).setAction(ACTION_START)
-            )
+            // Android's VpnService flow explicitly starts via startService;
+            // the service promotes itself once Builder.establish() activates the VPN.
+            context.startService(Intent(context, ArtVpnService::class.java).setAction(ACTION_START))
         }
 
         fun stop(context: android.content.Context) {
