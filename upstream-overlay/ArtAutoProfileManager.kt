@@ -34,9 +34,11 @@ object ArtAutoProfileManager {
     private const val PROFILE_NAME = "ART Auto"
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
+    private const val KEY_PROFILE_REVISION = "profile_revision"
+    private const val PROFILE_REVISION = 2
     private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
-    private const val MAX_NODES = 50
+    private const val MAX_NODES = 64
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
     private val feedGroups = listOf(
@@ -60,15 +62,23 @@ object ArtAutoProfileManager {
         val app = context.applicationContext
         val profiles = ProfileManager.list()
         val existing = profiles.firstOrNull { it.name == PROFILE_NAME }
-        val lastUpdated = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(KEY_UPDATED, 0L)
-        if (!force && existing != null && System.currentTimeMillis() - lastUpdated < REFRESH_INTERVAL) {
+        val preferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val lastUpdated = preferences.getLong(KEY_UPDATED, 0L)
+        val savedRevision = preferences.getInt(KEY_PROFILE_REVISION, 0)
+        if (!force && existing != null && savedRevision == PROFILE_REVISION &&
+            System.currentTimeMillis() - lastUpdated < REFRESH_INTERVAL) {
             return@withContext
         }
 
         val links = coroutineScope {
             feedGroups.map { mirrors -> async { fetchFirstValid(mirrors) } }.awaitAll()
-        }.flatten().distinct()
-        val outbounds = links.mapNotNull(::compileVless).distinctBy { it.optString("tag") }.take(MAX_NODES)
+        }.flatten()
+        // A feed often repeats one endpoint with different uTLS fingerprints or
+        // query-parameter ordering. Deduplicate by effective connection settings
+        // before applying the cap, or one feed can fill all slots with variants
+        // of the same few machines and starve the broader fallback list.
+        val uniqueLinks = links.distinctBy { nodeIdentity(it) ?: it }
+        val outbounds = uniqueLinks.mapNotNull(::compileVless).take(MAX_NODES)
         check(outbounds.isNotEmpty()) { "Не удалось получить рабочий список VLESS-конфигураций" }
 
         val nodeTags = JSONArray()
@@ -83,6 +93,7 @@ object ArtAutoProfileManager {
                 .put("url", "https://cp.cloudflare.com/generate_204")
                 .put("interval", "3m")
                 .put("tolerance", 60)
+                .put("interrupt_exist_connections", true)
         )
         allOutbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
 
@@ -136,10 +147,11 @@ object ArtAutoProfileManager {
             if (Settings.selectedProfile == -1L) Settings.selectedProfile = target.id
         }
 
-        app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+        preferences.edit()
             .putLong(KEY_UPDATED, System.currentTimeMillis())
+            .putInt(KEY_PROFILE_REVISION, PROFILE_REVISION)
             .apply()
-        Log.i(TAG, "Installed ART Auto profile with ${outbounds.size} VLESS candidates")
+        Log.i(TAG, "Installed ART Auto profile with ${outbounds.size} unique VLESS candidates (from ${links.size} links)")
     }
 
     private suspend fun fetchFirstValid(mirrors: List<String>): List<String> = coroutineScope {
@@ -189,6 +201,28 @@ object ArtAutoProfileManager {
         }
     }
 
+    private fun nodeIdentity(link: String): String? = runCatching {
+        val uri = URI(link.trim())
+        val uuid = uri.userInfo ?: error("missing uuid")
+        val host = uri.host?.lowercase() ?: error("missing host")
+        val port = uri.port
+        require(port in 1..65535)
+        val params = query(uri.rawQuery.orEmpty())
+        val transport = params["type"].orEmpty().lowercase().let {
+            if (it == "tcp") "" else it
+        }
+        listOf(
+            uuid.lowercase(), host, port.toString(),
+            params["security"].orEmpty().lowercase().let { if (it == "none") "" else it },
+            transport, params["flow"].orEmpty(),
+            params["sni"].orEmpty().lowercase(), params["pbk"].orEmpty(),
+            params["sid"].orEmpty().lowercase(), params["alpn"].orEmpty().lowercase(),
+            params["host"].orEmpty().lowercase(), params["path"].orEmpty(),
+            (params["serviceName"] ?: params["service_name"]).orEmpty(),
+            params["insecure"].orEmpty(), params["allowInsecure"].orEmpty()
+        ).joinToString("\u001f")
+    }.getOrNull()
+
     private fun compileVless(link: String): JSONObject? = runCatching {
         val uri = URI(link.trim())
         require(uri.scheme.equals("vless", true))
@@ -206,7 +240,8 @@ object ArtAutoProfileManager {
         require(flow.isBlank() || flow == "xtls-rprx-vision")
         if (flow.isNotBlank()) require(security == "tls" || security == "reality")
 
-        val tag = "art-" + sha256("$uuid|$host|$port|$security|$transportType|$link").take(16)
+        val identity = nodeIdentity(link) ?: error("invalid node identity")
+        val tag = "art-" + sha256(identity).take(16)
         val outbound = JSONObject()
             .put("type", "vless")
             .put("tag", tag)
