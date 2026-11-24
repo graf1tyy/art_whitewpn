@@ -20,6 +20,8 @@ PROBE_URL = "https://www.gstatic.com/generate_204"
 UUID_RE = re.compile(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 RESULT_RE = re.compile(r"outbound\s+(art-[0-9a-f]{16})\s+(available|unavailable)")
 FEEDS = [
+ ["https://raw.githubusercontent.com/mehrtat/vless-collector/main/vless.txt","https://cdn.jsdelivr.net/gh/mehrtat/vless-collector@main/vless.txt"],
+ ["https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt","https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt"],
  ["https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt","https://codeberg.org/zieng2/wl/raw/branch/main/vless_universal.txt","https://gitlab.com/zieng2/wl/raw/main/vless_universal.txt"],
  ["https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt","https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt","https://raw.githack.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt"],
  ["https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt","https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt","https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt"],

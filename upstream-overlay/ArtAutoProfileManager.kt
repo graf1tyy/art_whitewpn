@@ -42,7 +42,7 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 8
+    private const val PROFILE_REVISION = 9
     private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
@@ -55,6 +55,17 @@ object ArtAutoProfileManager {
     // arbitrary public links. Keep the Russia-focused feeds as additional
     // candidates, but never let one feed monopolize the pool.
     private val feedGroups = listOf(
+        // These two sources publish continuously refreshed, pre-tested VLESS
+        // candidates. Keep them first; the mobile whitelist feeds below remain
+        // as fallback pools for operators that restrict outbound destinations.
+        listOf(
+            "https://raw.githubusercontent.com/mehrtat/vless-collector/main/vless.txt",
+            "https://cdn.jsdelivr.net/gh/mehrtat/vless-collector@main/vless.txt"
+        ),
+        listOf(
+            "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+            "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt"
+        ),
         listOf(
             "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt",
             "https://codeberg.org/zieng2/wl/raw/branch/main/vless_universal.txt",
