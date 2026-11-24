@@ -61,6 +61,11 @@ object CrashDiagnostics {
             return "Обнаружено аварийное завершение приложения.\n\n" + firstLines
         }
         val lastStage = stage(context)
+        val goCrash = readGoCrashReports(context)
+        if (goCrash.isNotBlank()) {
+            return "Обнаружен отчёт аварии sing-box (Go runtime).\n\n" +
+                goCrash.lineSequence().take(8).joinToString("\n")
+        }
         if (lastStage.startsWith("RUNNING:") || lastStage.startsWith("FAILED:")) {
             val time = prefs(context).getLong(KEY_TIME, 0L)
             return "Последний запуск подключения оборвался на этапе:\n" + lastStage +
@@ -74,6 +79,7 @@ object CrashDiagnostics {
         val lastStage = stage(context)
         val time = prefs(context).getLong(KEY_TIME, 0L)
         val logs = readLogcat()
+        val goCrash = readGoCrashReports(context)
         return buildString {
             appendLine("=== ART VPN DIAGNOSTIC REPORT ===")
             appendLine("Android SDK: " + Build.VERSION.SDK_INT)
@@ -86,9 +92,12 @@ object CrashDiagnostics {
             appendLine("=== SAVED CRASH ===")
             appendLine(savedCrash.ifBlank { "No Java/Kotlin uncaught exception was saved." })
             appendLine()
+            appendLine("=== SING-BOX GO CRASH REPORT ===")
+            append(goCrash.ifBlank { "No sing-box Go crash report found." })
+            appendLine()
             appendLine("=== RELEVANT LOGCAT ===")
             append(logs)
-        }.takeLast(50000)
+        }.takeLast(65000)
     }
 
     fun clear(context: Context) {
@@ -100,6 +109,34 @@ object CrashDiagnostics {
                 .putLong(KEY_TIME, System.currentTimeMillis())
                 .apply()
         }
+    }
+
+    /**
+     * sing-box redirects Go stderr to CrashReport-<source>.log and archives the
+     * previous run into crash_reports on the next Libbox.setup(). Read both the
+     * current file and archived go.log files; Android logcat alone often only
+     * exposes the final SIGABRT and a stripped libbox.so address.
+     */
+    private fun readGoCrashReports(context: Context): String {
+        val roots = listOf(
+            File(context.filesDir, "sing-box/working"),
+            File(context.filesDir, "sing-box"),
+            File(context.cacheDir, "sing-box"),
+        )
+        val files = linkedSetOf<File>()
+        for (root in roots) {
+            if (!root.exists()) continue
+            File(root, "CrashReport-ART VPN.log").takeIf { it.isFile && it.length() > 0 }?.let(files::add)
+            File(root, "crash_reports").walkTopDown()
+                .filter { it.isFile && it.name == "go.log" && it.length() > 0 }
+                .sortedByDescending { it.lastModified() }
+                .take(5)
+                .forEach(files::add)
+        }
+        return files.take(6).joinToString("\n\n===== NEXT GO CRASH FILE =====\n\n") { file ->
+            val body = runCatching { file.readText() }.getOrDefault("Unable to read " + file.name)
+            "FILE: " + file.name + " (" + file.length() + " bytes)\n" + body.takeLast(24000)
+        }.takeLast(52000)
     }
 
     private fun stage(context: Context): String =
