@@ -110,35 +110,6 @@ if "ArtAutoProfileManager.installOrRefresh" not in a:
     )
 application.write_text(a)
 
-# The upstream URLTest group falls back to its first candidate when no
-# probe has succeeded yet. For ART Auto this caused a dead first server to be
-# used as if it were selected. Fail closed until an outbound has probe history.
-urltest = up / "protocol/group/urltest.go"
-ut = urltest.read_text()
-fallback = """\tif minOutbound == nil {
-\t\tfor _, detour := range g.outbounds {
-\t\t\tif !common.Contains(detour.Network(), network) {
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\treturn detour, false
-\t\t}
-\t\treturn nil, false
-\t}"""
-replacement = """\tif minOutbound == nil {
-\t\treturn nil, false
-\t}"""
-assert ut.count(fallback) == 1, "Unexpected URLTest fallback implementation"
-urltest.write_text(ut.replace(fallback, replacement, 1))
-
-# Speed up the first URLTest sweep: ART already filters candidates by TCP
-# reachability on the device, so the native handshake tests can run concurrently.
-assert ut.count("batch.WithConcurrencyNum[any](10)") == 1, "Unexpected URLTest concurrency"
-urltest.write_text(urltest.read_text().replace(
-    "batch.WithConcurrencyNum[any](10)",
-    "batch.WithConcurrencyNum[any](32)",
-    1
-))
-
 # Schedule automatic server-list refresh every six hours, with the first import
 # already performed by Application on first start.
 if "ArtAutoProfileWorker" not in a:
