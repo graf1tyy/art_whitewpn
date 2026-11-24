@@ -519,6 +519,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun onPowerButtonClick() {
+        CrashDiagnostics.mark(this, "RUNNING:power-button")
         if (connected || connecting) {
             ArtVpnService.stop(this)
             return
@@ -533,6 +534,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun askVpnPermission() {
+        CrashDiagnostics.mark(this, "RUNNING:checking-vpn-permission")
         val selected = nodes.firstOrNull { it.id == selectedId } ?: bestRememberedNode(nodes)
         if (selected == null) {
             connectAfterRefresh = true
@@ -546,7 +548,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectNow() {
-        ArtVpnService.start(this)
+        CrashDiagnostics.mark(this, "RUNNING:activity-connectNow")
+        try {
+            ArtVpnService.start(this)
+        } catch (error: Exception) {
+            CrashDiagnostics.mark(this, "FAILED:activity-start-service:" + error.javaClass.simpleName + ":" + error.message)
+            connecting = false
+            connected = false
+            status = "Не удалось запустить VPN: " + (error.message ?: error.javaClass.simpleName)
+        }
     }
 
     private fun measureSpeed() {

@@ -5,7 +5,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
-import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.VpnService
@@ -13,7 +12,6 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.core.app.ServiceCompat
 import com.artvpn.app.CrashDiagnostics
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
@@ -94,9 +92,16 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         CrashDiagnostics.mark(this, "RUNNING:onStartCommand:" + intent?.action)
-        when (intent?.action) {
-            ACTION_STOP -> stopTunnel()
-            else -> startTunnel()
+        try {
+            when (intent?.action) {
+                ACTION_STOP -> stopTunnel()
+                else -> startTunnel()
+            }
+        } catch (error: Exception) {
+            CrashDiagnostics.mark(this, "FAILED:onStartCommand:" + error.javaClass.simpleName + ":" + error.message)
+            Log.e(TAG, "Unable to start VPN service", error)
+            sendStatus(ACTION_FAILED, error.message ?: "Не удалось запустить VPN-службу")
+            stopSelf(startId)
         }
         return START_NOT_STICKY
     }
@@ -105,6 +110,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (closing || connectionJob?.isActive == true || commandServer != null) return
         closing = false
         createNotificationChannel()
+        CrashDiagnostics.mark(this, "RUNNING:foreground-promotion")
+        promoteToForeground("Автоматически подбираем сервер…")
         CrashDiagnostics.mark(this, "RUNNING:startTunnel")
         Log.i(TAG, "VPN service started; preparing the tunnel")
         sendStatus(ACTION_CONNECTING, "Подбираем лучший сервер…")
@@ -295,12 +302,10 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             updateNotification(text)
             return
         }
-        val type = if (Build.VERSION.SDK_INT >= 34) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_SYSTEM_EXEMPTED
-        } else {
-            0
-        }
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, notification(text), type)
+        // Match the Android VpnService lifecycle used by the official
+        // sing-box client: start foreground immediately from onStartCommand.
+        // Android reads the declared systemExempted type from the manifest.
+        startForeground(NOTIFICATION_ID, notification(text))
         foregroundStarted = true
         Log.i(TAG, "Foreground mode enabled after VPN interface establishment")
     }
@@ -519,9 +524,10 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
         fun start(context: android.content.Context) {
-            // Android's VpnService flow explicitly starts via startService;
-            // the service promotes itself once Builder.establish() activates the VPN.
-            context.startService(Intent(context, ArtVpnService::class.java).setAction(ACTION_START))
+            CrashDiagnostics.mark(context, "RUNNING:request-foreground-service")
+            androidx.core.content.ContextCompat.startForegroundService(
+                context, Intent(context, ArtVpnService::class.java).setAction(ACTION_START)
+            )
         }
 
         fun stop(context: android.content.Context) {

@@ -50,7 +50,7 @@ object CrashDiagnostics {
             prefs(context).edit()
                 .putString(KEY_STAGE, value.take(240))
                 .putLong(KEY_TIME, System.currentTimeMillis())
-                .apply()
+                .commit()
         }
     }
 
