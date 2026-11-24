@@ -52,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
@@ -408,9 +409,26 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun findConnectionOwner(
         ipProtocol: Int, sourceAddress: String, sourcePort: Int,
         destinationAddress: String, destinationPort: Int
-    ): ConnectionOwner = Libbox.findConnectionOwner(
-        ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort
-    )
+    ): ConnectionOwner {
+        val owner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val uid = getSystemService(ConnectivityManager::class.java)
+                .getConnectionOwnerUid(
+                    ipProtocol,
+                    InetSocketAddress(sourceAddress, sourcePort),
+                    InetSocketAddress(destinationAddress, destinationPort)
+                )
+            check(uid != android.os.Process.INVALID_UID) { "Connection owner not found" }
+            ConnectionOwner().apply { userId = uid }
+        } else {
+            Libbox.findConnectionOwner(
+                ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort
+            )
+        }
+        val packages = packageManager.getPackagesForUid(owner.userId)?.toList().orEmpty()
+        owner.userName = packages.firstOrNull().orEmpty()
+        owner.setAndroidPackageNames(StringList(packages))
+        return owner
+    }
 
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
         // The physical network watcher is started before the core so DNS can
