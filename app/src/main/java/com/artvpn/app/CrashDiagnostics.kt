@@ -124,7 +124,7 @@ object CrashDiagnostics {
                     line.contains("libbox", ignoreCase = true) ||
                     line.contains("sing-box", ignoreCase = true)
             }.toList()
-            (if (relevant.isNotEmpty()) relevant.takeLast(180) else raw.lineSequence().takeLast(100).toList())
+            (if (relevant.isNotEmpty()) relevant.takeLast(180) else raw.lineSequence().toList().takeLast(100))
                 .joinToString("\n")
                 .ifBlank { "Logcat did not return readable entries." }
         } catch (error: Throwable) {
