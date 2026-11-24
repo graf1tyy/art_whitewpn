@@ -1,6 +1,9 @@
 package io.nekohasekai.sfa.artvpn
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.database.Profile
@@ -78,6 +81,20 @@ object ArtAutoProfileManager {
             return@withContext
         }
 
+        // Bind probes to Wi-Fi/mobile data, never to the VPN being refreshed.
+        val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        val physicalNetwork = connectivity?.allNetworks?.firstOrNull { network ->
+            val capabilities = connectivity.getNetworkCapabilities(network)
+            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN).not()
+        } ?: connectivity?.activeNetwork?.takeIf { network ->
+            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true
+        }
+        if (physicalNetwork == null) {
+            Log.w(TAG, "No physical network available; keeping the current ART Auto profile")
+            return@withContext
+        }
+
         val links = coroutineScope {
             feedGroups.map { mirrors -> async { fetchFirstValid(mirrors) } }.awaitAll()
         }.flatten()
@@ -87,7 +104,7 @@ object ArtAutoProfileManager {
         val uniqueLinks = links.sortedBy(::fingerprintRank)
             .distinctBy { nodeIdentity(it) ?: it }
             .filter { compileVless(it) != null }
-        val reachableLinks = filterTcpReachable(uniqueLinks)
+        val reachableLinks = filterTcpReachable(uniqueLinks, physicalNetwork)
         val outbounds = reachableLinks.mapNotNull(::compileVless).take(MAX_NODES)
         Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
         if (outbounds.isEmpty()) {
@@ -229,7 +246,7 @@ object ArtAutoProfileManager {
         }
     }.getOrDefault(10)
 
-    private suspend fun filterTcpReachable(candidates: List<String>): List<String> {
+    private suspend fun filterTcpReachable(candidates: List<String>, network: Network): List<String> {
         val semaphore = Semaphore(TCP_PROBE_CONCURRENCY)
         val reachable = mutableListOf<String>()
         // Probe in batches so a large feed does not create hundreds of sockets
@@ -239,7 +256,7 @@ object ArtAutoProfileManager {
                 batch.map { link ->
                     async(Dispatchers.IO) {
                         semaphore.withPermit {
-                            if (tcpReachable(link)) link else null
+                            if (tcpReachable(link, network)) link else null
                         }
                     }
                 }.awaitAll()
@@ -250,14 +267,18 @@ object ArtAutoProfileManager {
         return reachable.take(MAX_NODES)
     }
 
-    private fun tcpReachable(link: String): Boolean = runCatching {
+    private fun tcpReachable(link: String, network: Network): Boolean = runCatching {
         val uri = URI(link.trim())
         val host = uri.host ?: error("missing host")
         val port = uri.port
         require(port in 1..65535)
-        Socket().use { socket ->
-            socket.connect(InetSocketAddress(host, port), TCP_PROBE_TIMEOUT_MS)
-            socket.isConnected
+        network.getAllByName(host).any { address ->
+            runCatching {
+                network.socketFactory.createSocket().use { socket ->
+                    socket.connect(InetSocketAddress(address, port), TCP_PROBE_TIMEOUT_MS)
+                    socket.isConnected
+                }
+            }.getOrDefault(false)
         }
     }.getOrDefault(false)
 
