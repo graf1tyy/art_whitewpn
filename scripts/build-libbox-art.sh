@@ -138,13 +138,17 @@ text = text.replace(listen_select, listen_select_replacement, 1)
 dial_failure = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
 \treturn nil, err"""
-dial_replacement = """\ts.logger.ErrorContext(ctx, err)
+dial_replacement_tcp = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
-\t// Re-select immediately; the next candidate is used for the next flow.
-\ts.group.performUpdateCheck()
+\ts.group.performFailover(N.NetworkTCP, outbound)
+\treturn nil, err"""
+dial_replacement_udp = """\ts.logger.ErrorContext(ctx, err)
+\ts.group.history.DeleteURLTestHistory(outbound.Tag())
+\ts.group.performFailover(N.NetworkUDP, outbound)
 \treturn nil, err"""
 assert text.count(dial_failure) == 2, "Unexpected URLTest dial failure handling"
-text = text.replace(dial_failure, dial_replacement)
+text = text.replace(dial_failure, dial_replacement_tcp, 1)
+text = text.replace(dial_failure, dial_replacement_udp, 1)
 
 # Surface health-check failures at WARN level because the ART profile normally
 # runs with sing-box log level=warn. This reveals why candidates were rejected.
@@ -220,6 +224,41 @@ update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
 assert text.count(update_check) == 1, "URLTest selection update implementation changed"
 text = text.replace(update_check, update_replacement, 1)
 
+failover_helper = """\n\n// Only the currently selected outbound may advance the provisional fallback.
+// Late failures from earlier in-flight requests must not skip a healthy next node.
+func (g *URLTestGroup) performFailover(network string, failed adapter.Outbound) {
+\tg.updateAccess.Lock()
+\tdefer g.updateAccess.Unlock()
+\tvar current adapter.Outbound
+\tswitch network {
+\tcase N.NetworkTCP:
+\t\tcurrent = g.selectedOutboundTCP
+\tcase N.NetworkUDP:
+\t\tcurrent = g.selectedOutboundUDP
+\tdefault:
+\t\treturn
+\t}
+\tif current != failed {
+\t\treturn
+\t}
+\tnext, _ := g.Select(network)
+\tif next == failed {
+\t\treturn
+\t}
+\tswitch network {
+\tcase N.NetworkTCP:
+\t\tg.selectedOutboundTCP = next
+\tcase N.NetworkUDP:
+\t\tg.selectedOutboundUDP = next
+\t}
+\tg.interruptGroup.Interrupt(g.interruptExternalConnections)
+\tg.history.NotifyUpdated()
+}"""
+assert text.count(update_replacement) == 1, "URLTest update helper anchor changed"
+text = text.replace(update_replacement, update_replacement + failover_helper, 1)
+
+assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
+assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
 assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text

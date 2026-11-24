@@ -18,6 +18,11 @@ MAX_NODES = 48
 PORT = 10808
 PROBE_URL = "https://www.gstatic.com/generate_204"
 UUID_RE = re.compile(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+SUPPORTED_FINGERPRINTS = {
+    "chrome", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle",
+    "chrome_pq", "chrome_pq_psk", "firefox", "edge", "safari", "360",
+    "qq", "ios", "android", "random", "randomized"
+}
 RESULT_RE = re.compile(r"outbound\s+(art-[0-9a-f]{16})\s+(available|unavailable)")
 FEEDS = [
  ["https://raw.githubusercontent.com/mehrtat/vless-collector/main/vless.txt","https://cdn.jsdelivr.net/gh/mehrtat/vless-collector@main/vless.txt"],
@@ -91,7 +96,10 @@ def compile_node(link):
         tls = {"enabled":True}
         if q.get("sni"):
             tls["server_name"] = q["sni"]
-        tls["utls"] = {"enabled":True,"fingerprint":q.get("fp") or "chrome"}
+        fingerprint = (q.get("fp") or "chrome").lower()
+        if fingerprint not in SUPPORTED_FINGERPRINTS:
+            return None
+        tls["utls"] = {"enabled":True,"fingerprint":fingerprint}
         if q.get("alpn"):
             tls["alpn"] = [x.strip() for x in q["alpn"].split(",") if x.strip()]
         if sec == "reality":

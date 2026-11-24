@@ -49,6 +49,11 @@ object ArtAutoProfileManager {
     private const val TCP_PROBE_TIMEOUT_MS = 1800
     private const val TCP_PROBE_CONCURRENCY = 32
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    private val supportedFingerprints = setOf(
+        "chrome", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle",
+        "chrome_pq", "chrome_pq_psk", "firefox", "edge", "safari", "360",
+        "qq", "ios", "android", "random", "randomized"
+    )
 
     // Start with a separately health-checked mobile VLESS bundle. The source
     // rebuilds its list from measured configs rather than merely aggregating
@@ -369,7 +374,8 @@ object ArtAutoProfileManager {
         if (security == "tls" || security == "reality") {
             val tls = JSONObject().put("enabled", true)
             params["sni"]?.takeIf { it.isNotBlank() }?.let { tls.put("server_name", it) }
-            val fingerprint = params["fp"]?.takeIf { it.isNotBlank() } ?: "chrome"
+            val fingerprint = (params["fp"]?.takeIf { it.isNotBlank() } ?: "chrome").lowercase()
+            require(fingerprint in supportedFingerprints)
             tls.put("utls", JSONObject().put("enabled", true).put("fingerprint", fingerprint))
             params["alpn"]?.takeIf { it.isNotBlank() }?.let {
                 tls.put("alpn", JSONArray(it.split(",").map(String::trim).filter(String::isNotBlank)))
