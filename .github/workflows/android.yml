@@ -32,7 +32,7 @@ jobs:
       - name: Set up Android SDK 37 and NDK
         uses: android-actions/setup-android@v4
         with:
-          packages: platform-tools platforms;android-37 build-tools;37.0.0 ndk;28.0.13004108
+          packages: platform-tools platforms;android-36 build-tools;36.0.0 ndk;28.0.13004108
 
       - name: Set up Gradle 9.7
         uses: gradle/actions/setup-gradle@v4
