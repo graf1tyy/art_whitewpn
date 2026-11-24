@@ -1,4 +1,4 @@
-name: ART VPN — Official sing-box base
+name: ART VPN — Auto selection repair
 
 on:
   push:
@@ -98,9 +98,9 @@ jobs:
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.0.0-build.${{ github.run_number }}
+          tag_name: v1.0.1-build.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: ART VPN 1.0.0 — build ${{ github.run_number }}
+          name: ART VPN 1.0.1 — build ${{ github.run_number }}
           prerelease: true
           generate_release_notes: true
           files: art/dist/ART-VPN-arm64.apk
