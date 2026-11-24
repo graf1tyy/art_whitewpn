@@ -92,6 +92,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        CrashDiagnostics.mark(this, "RUNNING:onStartCommand:" + intent?.action)
         when (intent?.action) {
             ACTION_STOP -> stopTunnel()
             else -> startTunnel()
@@ -103,6 +104,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         if (closing || connectionJob?.isActive == true || commandServer != null) return
         closing = false
         createNotificationChannel()
+        CrashDiagnostics.mark(this, "RUNNING:startTunnel")
         Log.i(TAG, "VPN service started; preparing the tunnel")
         sendStatus(ACTION_CONNECTING, "Подбираем лучший сервер…")
 
@@ -138,9 +140,12 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     "Нет серверов для подключения. Сначала обновите список."
                 }
 
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:physical-network-monitor")
                 networkMonitor.start(networkBootstrapListener)
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:command-server-create")
                 val server = CommandServer(this@ArtVpnService, this@ArtVpnService)
                 server.start()
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:command-server-started")
                 commandServer = server
 
                 var lastFailure = "Сайты не ответили через VPN"
@@ -149,14 +154,19 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     updateNotification(progress)
                     sendStatus(ACTION_CONNECTING, progress)
                     try {
+                        CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:compile-config:" + (index + 1))
                         val config = VpnConfigCompiler.compile(node)
+                        CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:validate-config:" + (index + 1))
                         Libbox.checkConfig(config)
+                        CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:libbox-start:" + (index + 1))
                         server.startOrReloadService(config, OverrideOptions())
+                        CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:traffic-probe:" + (index + 1))
                         delay(350)
 
                         if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
                             repository.markSuccessful(node.shareLink, networkKey)
+                            CrashDiagnostics.mark(this@ArtVpnService, "CONNECTED:" + node.countryLabel)
                             updateNotification("VPN подключён")
                             sendStatus(
                                 ACTION_CONNECTED,
@@ -170,6 +180,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (e: Exception) {
+                        CrashDiagnostics.mark(this@ArtVpnService, "FAILED:candidate-" + (index + 1) + ":" + e.javaClass.simpleName + ":" + e.message)
                         Log.e(TAG, "Candidate ${index + 1} failed (${node.countryLabel})", e)
                         repository.markFailed(node.shareLink, networkKey)
                         lastFailure = e.message ?: "Сервер не ответил"
@@ -180,9 +191,10 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 )
             } catch (cancelled: CancellationException) {
                 closeTunnel(notifyDisconnected = false)
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
+                CrashDiagnostics.mark(this@ArtVpnService, "FAILED:connection:" + e.javaClass.simpleName + ":" + e.message)
                 Log.e(TAG, "VPN connection attempt failed", e)
-                sendStatus(ACTION_FAILED, e.message ?: "Не удалось подключиться")
+                sendStatus(ACTION_FAILED, e.message ?: e.javaClass.simpleName)
                 closeTunnel(notifyDisconnected = false)
             }
         }
@@ -247,7 +259,10 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 foregroundStarted = false
             }
-            if (notifyDisconnected) sendStatus(ACTION_DISCONNECTED, "VPN отключён")
+            if (notifyDisconnected) {
+                CrashDiagnostics.mark(this@ArtVpnService, "STOPPED:user-disconnect")
+                sendStatus(ACTION_DISCONNECTED, "VPN отключён")
+            }
             stopSelf()
         }
     }
@@ -312,6 +327,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun openTun(options: TunOptions): Int {
+        CrashDiagnostics.mark(this, "RUNNING:openTun-enter")
         check(VpnService.prepare(this) == null) { "Android VPN permission was revoked" }
         val builder = Builder()
             .setSession("ART VPN")
@@ -361,12 +377,14 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             }
         }
 
+        CrashDiagnostics.mark(this, "RUNNING:openTun-establish")
         val descriptor = builder.establish()
             ?: error("Android не разрешил создать VPN-туннель")
         tunnel = descriptor
         // systemExempted is permitted for an active VPN, so promote only after
         // Android has created the VPN interface, not before Builder.establish().
         promoteToForeground("Подключаем защищённое соединение…")
+        CrashDiagnostics.mark(this, "RUNNING:openTun-complete")
         return descriptor.fd
     }
 

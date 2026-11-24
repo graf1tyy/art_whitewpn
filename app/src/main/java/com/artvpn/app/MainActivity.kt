@@ -35,6 +35,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -52,6 +53,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -78,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private var connected by mutableStateOf(false)
     private var status by mutableStateOf("Готов к подключению")
     private var speed by mutableStateOf("—")
+    private var startupDiagnostic by mutableStateOf<String?>(null)
     private var showServers by mutableStateOf(false)
     private var connectAfterRefresh = false
     private var speedJobRunning = false
@@ -123,6 +127,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        startupDiagnostic = CrashDiagnostics.previousFailureSummary(this)
+        if (startupDiagnostic == null) CrashDiagnostics.mark(this, "IDLE:main-activity-opened")
         repository = NodeRepository(this)
         nodes = repository.rankForNetwork(
             repository.cached(), NetworkProfile.activeNetworkProfile(this)
@@ -164,6 +170,25 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun ArtVpnScreen() {
+        val clipboardManager = LocalClipboardManager.current
+        startupDiagnostic?.let { diagnostic ->
+            AlertDialog(
+                onDismissRequest = { startupDiagnostic = null },
+                title = { Text("Отчёт о сбое ART VPN") },
+                text = { Text(diagnostic) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        clipboardManager.setText(AnnotatedString(CrashDiagnostics.buildReport(this@MainActivity)))
+                        CrashDiagnostics.clear(this@MainActivity)
+                        startupDiagnostic = null
+                        status = "Диагностический отчёт скопирован"
+                    }) { Text("Скопировать отчёт") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { startupDiagnostic = null }) { Text("Закрыть") }
+                }
+            )
+        }
         val pulseTransition = rememberInfiniteTransition(label = "connect-pulse")
         val pulse by pulseTransition.animateFloat(
             initialValue = 1f,
