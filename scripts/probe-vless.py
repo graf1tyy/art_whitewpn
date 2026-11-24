@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 MAX_NODES = 48
 PORT = 10808
 PROBE_URL = "https://www.gstatic.com/generate_204"
+PROBE_FALLBACK_URL = "https://cp.cloudflare.com/generate_204"
 UUID_RE = re.compile(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 SUPPORTED_FINGERPRINTS = {
     "chrome", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle",
@@ -229,12 +230,19 @@ def main():
                     print("FAIL: end-to-end health check did not prove a working server")
                     print("\n".join(content.splitlines()[-80:]))
                     return 1
-                curl = subprocess.run(["curl","--silent","--show-error","--output",os.devnull,"--write-out","%{http_code}","--max-time","20","--socks5-hostname",f"127.0.0.1:{PORT}",PROBE_URL],text=True,capture_output=True)
-                print(f"HTTPS through auto-selected VLESS: exit={curl.returncode}, HTTP={curl.stdout.strip() or 'none'}")
-                if curl.returncode or curl.stdout.strip()!="204":
-                    print("FAIL: selected outbound did not carry the real HTTPS request")
-                    print(curl.stderr.strip())
-                    print("\n".join(content.splitlines()[-80:]))
+                curl = None
+                last_attempt = None
+                for probe_url in (PROBE_URL, PROBE_FALLBACK_URL):
+                    attempt = subprocess.run(["curl","--silent","--show-error","--output",os.devnull,"--write-out","%{http_code}","--max-time","8","--socks5-hostname",f"127.0.0.1:{PORT}",probe_url],text=True,capture_output=True)
+                    last_attempt = attempt
+                    print(f"HTTPS probe {probe_url}: exit={attempt.returncode}, HTTP={attempt.stdout.strip() or 'none'}")
+                    if attempt.returncode == 0 and attempt.stdout.strip() == "204":
+                        curl = attempt
+                        break
+                if curl is None:
+                    print("FAIL: selected outbound did not carry either real HTTPS request")
+                    print(last_attempt.stderr.strip() if last_attempt else "No HTTPS request was attempted")
+                    print("\\n".join(content.splitlines()[-80:]))
                     return 1
                 print("PASS: real HTTPS traffic passed through ART Auto")
                 for tag in passed:

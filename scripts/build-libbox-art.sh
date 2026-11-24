@@ -264,8 +264,69 @@ assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound !=
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
 assert "context.WithTimeout(b.ctx, 6*time.Second)" in text
 
+# URLTest must not depend on a single health-check host: mobile operators
+# and networks can filter gstatic while allowing other HTTPS destinations.
+health_source = core / "common/urltest/urltest.go"
+health_text = health_source.read_text()
+old_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) (uint16, error) {
+\tmultiplexOutbound, isMultiplexOutbound := common.Cast[adapter.OutboundWithMultiplex](detour)
+\tif isMultiplexOutbound && multiplexOutbound.MultiplexEnabled() {
+\t\twarmContext := adapter.ContextWithKeepSession(ctx)
+\t\twarmContext = mux.ContextWithKeepSession(warmContext)
+\t\twarmContext = contextWithQUICKeepSession(warmContext)
+\t\twarmContext = snell.ContextWithKeepSession(warmContext)
+\t\t_, err := urlTest(warmContext, link, detour)
+\t\tif err != nil {
+\t\t\treturn 0, err
+\t\t}
+\t}
+\treturn urlTest(ctx, link, detour)
+}"""
+new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) (uint16, error) {
+\tif link == "" {
+\t\tlink = "https://www.gstatic.com/generate_204"
+\t}
+\tlinks := []string{link}
+\tif link != "https://cp.cloudflare.com/generate_204" {
+\t\tlinks = append(links, "https://cp.cloudflare.com/generate_204")
+\t}
+\tvar lastError error
+\tfor _, probeURL := range links {
+\t\tprobeContext, cancel := context.WithTimeout(ctx, 2100*time.Millisecond)
+\t\tmultiplexOutbound, isMultiplexOutbound := common.Cast[adapter.OutboundWithMultiplex](detour)
+\t\tif isMultiplexOutbound && multiplexOutbound.MultiplexEnabled() {
+\t\t\twarmContext := adapter.ContextWithKeepSession(probeContext)
+\t\t\twarmContext = mux.ContextWithKeepSession(warmContext)
+\t\t\twarmContext = contextWithQUICKeepSession(warmContext)
+\t\t\twarmContext = snell.ContextWithKeepSession(warmContext)
+\t\t\t_, err := urlTest(warmContext, probeURL, detour)
+\t\t\tif err != nil {
+\t\t\t\tcancel()
+\t\t\t\tlastError = err
+\t\t\t\tif ctx.Err() != nil {
+\t\t\t\t\treturn 0, ctx.Err()
+\t\t\t\t}
+\t\t\t\tcontinue
+\t\t\t}
+\t\t}
+\t\tdelay, err := urlTest(probeContext, probeURL, detour)
+\t\tcancel()
+\t\tif err == nil {
+\t\t\treturn delay, nil
+\t\t}
+\t\tlastError = err
+\t\tif ctx.Err() != nil {
+\t\t\treturn 0, ctx.Err()
+\t\t}
+\t}
+\treturn 0, lastError
+}"""
+assert health_text.count(old_health) == 1, "sing-box URLTest function changed; refusing unsafe patch"
+health_text = health_text.replace(old_health, new_health, 1)
+health_source.write_text(health_text)
+
 source.write_text(text)
-print("Patched URLTest: immediate fallback rotation, no repeat of failed node, 6s HTTPS probes, WARN diagnostics")
+print("Patched URLTest: bounded multi-endpoint HTTPS fallback, guarded failover, 6s total probe deadline, WARN diagnostics")
 PY
 
 cd "$CORE_DIR"

@@ -37,8 +37,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.nekohasekai.sfa.constant.Status
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -58,8 +61,8 @@ internal fun ArtHomeScreen(
         tunnelVerified = false
         if (serviceStatus == Status.Started) {
             while (true) {
-                tunnelVerified = withContext(Dispatchers.IO) { verifyArtTunnel() }
-                delay(if (tunnelVerified) 12_000L else 2_200L)
+                tunnelVerified = verifyArtTunnel()
+                delay(if (tunnelVerified) 12_000L else 1_200L)
             }
         }
     }
@@ -213,22 +216,34 @@ internal fun ArtHomeScreen(
     }
 }
 
-private fun verifyArtTunnel(): Boolean {
-    var connection: HttpURLConnection? = null
-    return try {
-        connection = URL("https://www.gstatic.com/generate_204")
-            .openConnection() as HttpURLConnection
-        connection.connectTimeout = 3_500
-        connection.readTimeout = 3_500
-        connection.requestMethod = "GET"
-        connection.instanceFollowRedirects = false
-        connection.useCaches = false
-        connection.setRequestProperty("Cache-Control", "no-cache")
-        connection.setRequestProperty("User-Agent", "ART-VPN-Android/1.0")
-        connection.responseCode == 204
-    } catch (_: Exception) {
-        false
-    } finally {
-        connection?.disconnect()
-    }
+private suspend fun verifyArtTunnel(): Boolean {
+    val endpoints = listOf(
+        "https://www.gstatic.com/generate_204",
+        "https://cp.cloudflare.com/generate_204",
+    )
+    return withTimeoutOrNull(2_600L) {
+        coroutineScope {
+            endpoints.map { endpoint ->
+                async(Dispatchers.IO) {
+                    var connection: HttpURLConnection? = null
+                    try {
+                        connection = URL(endpoint).openConnection() as HttpURLConnection
+                        connection.connectTimeout = 1_700
+                        connection.readTimeout = 1_700
+                        connection.requestMethod = "GET"
+                        connection.instanceFollowRedirects = false
+                        connection.useCaches = false
+                        connection.setRequestProperty("Cache-Control", "no-cache")
+                        connection.setRequestProperty("User-Agent", "ART-VPN-Android/1.0")
+                        val code = connection.responseCode
+                        code in 200..399
+                    } catch (_: Exception) {
+                        false
+                    } finally {
+                        connection?.disconnect()
+                    }
+                }
+            }.awaitAll().any { it }
+        }
+    } ?: false
 }
