@@ -55,8 +55,8 @@ gradle.write_text(text)
 
 version = up / "version.properties"
 v = version.read_text()
-v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=751", v)
-v = re.sub(r"(?m)^VERSION_NAME=.*$", "VERSION_NAME=1.0.3", v)
+v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=752", v)
+v = re.sub(r"(?m)^VERSION_NAME=.*$", "VERSION_NAME=1.0.4", v)
 version.write_text(v)
 
 # Keep the ART package and its stable icon, but use the official SFA native VPN
