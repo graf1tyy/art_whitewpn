@@ -235,6 +235,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
             runCatching { commandServer?.closeService() }
             runCatching { commandServer?.close() }
             commandServer = null
+            runCatching { if (networkMonitorDelegate.isInitialized()) networkMonitor.stop() }
             runCatching { tunnel?.close() }
             tunnel = null
             stopForeground(STOP_FOREGROUND_REMOVE)
@@ -360,7 +361,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
 
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-        networkMonitor.stop()
+        // Keep the physical-network watcher alive across core reloads; the
+        // service uses it to update VpnService.setUnderlyingNetworks().
+        networkMonitor.start(networkBootstrapListener)
     }
 
     override fun getInterfaces(): NetworkInterfaceIterator {
