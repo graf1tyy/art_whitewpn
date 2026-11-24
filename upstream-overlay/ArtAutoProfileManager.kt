@@ -15,9 +15,13 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URI
 import java.net.URL
 import java.net.URLDecoder
@@ -35,13 +39,21 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 2
+    private const val PROFILE_REVISION = 3
     private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
-    private const val MAX_NODES = 64
+    private const val MAX_NODES = 48
+    private const val TCP_PROBE_TIMEOUT_MS = 1800
+    private const val TCP_PROBE_CONCURRENCY = 32
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
+    // Start with the largest independent VLESS feed; the two smaller
+    // white-list feeds are appended as fallbacks, not allowed to crowd it out.
     private val feedGroups = listOf(
+        listOf(
+            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
+            "https://raw.githack.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt"
+        ),
         listOf(
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
             "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -51,10 +63,6 @@ object ArtAutoProfileManager {
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
             "https://gitlab.com/igareck/vpn-configs-for-russia/-/raw/main/WHITE-CIDR-RU-all.txt",
             "https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt"
-        ),
-        listOf(
-            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
-            "https://raw.githack.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt"
         )
     )
 
@@ -73,13 +81,21 @@ object ArtAutoProfileManager {
         val links = coroutineScope {
             feedGroups.map { mirrors -> async { fetchFirstValid(mirrors) } }.awaitAll()
         }.flatten()
-        // A feed often repeats one endpoint with different uTLS fingerprints or
-        // query-parameter ordering. Deduplicate by effective connection settings
-        // before applying the cap, or one feed can fill all slots with variants
-        // of the same few machines and starve the broader fallback list.
-        val uniqueLinks = links.distinctBy { nodeIdentity(it) ?: it }
-        val outbounds = uniqueLinks.mapNotNull(::compileVless).take(MAX_NODES)
-        check(outbounds.isNotEmpty()) { "Не удалось получить рабочий список VLESS-конфигураций" }
+        // Prefer Chrome uTLS variants when a feed publishes the same endpoint
+        // several times. Then remove duplicates and TCP-probe candidates from
+        // the phone before adding them to the profile.
+        val uniqueLinks = links.sortedBy(::fingerprintRank)
+            .distinctBy { nodeIdentity(it) ?: it }
+        val reachableLinks = filterTcpReachable(uniqueLinks)
+        val outbounds = reachableLinks.mapNotNull(::compileVless).take(MAX_NODES)
+        Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
+        if (outbounds.isEmpty()) {
+            if (existing != null) {
+                ProfileManager.delete(existing)
+                if (Settings.selectedProfile == existing.id) Settings.selectedProfile = -1L
+            }
+            error("Не найдено VLESS-серверов с доступным TCP-портом. Профиль ART Auto удалён, чтобы не показывать ложное подключение.")
+        }
 
         val nodeTags = JSONArray()
         outbounds.forEach { nodeTags.put(it.getString("tag")) }
@@ -90,8 +106,8 @@ object ArtAutoProfileManager {
                 .put("type", "urltest")
                 .put("tag", "art-auto")
                 .put("outbounds", nodeTags)
-                .put("url", "https://cp.cloudflare.com/generate_204")
-                .put("interval", "3m")
+                .put("url", "https://connectivitycheck.gstatic.com/generate_204")
+                .put("interval", "45s")
                 .put("tolerance", 60)
                 .put("interrupt_exist_connections", true)
         )
@@ -200,6 +216,49 @@ object ArtAutoProfileManager {
             connection.disconnect()
         }
     }
+
+    private fun fingerprintRank(link: String): Int = runCatching {
+        when (query(URI(link.trim()).rawQuery.orEmpty())["fp"].orEmpty().lowercase()) {
+            "", "chrome" -> 0
+            "edge" -> 1
+            "firefox" -> 2
+            "safari" -> 3
+            "android" -> 4
+            else -> 5
+        }
+    }.getOrDefault(10)
+
+    private suspend fun filterTcpReachable(candidates: List<String>): List<String> {
+        val semaphore = Semaphore(TCP_PROBE_CONCURRENCY)
+        val reachable = mutableListOf<String>()
+        // Probe in batches so a large feed does not create hundreds of sockets
+        // at once. Stop when enough genuinely reachable endpoints are collected.
+        for (batch in candidates.chunked(TCP_PROBE_CONCURRENCY * 2)) {
+            val results = coroutineScope {
+                batch.map { link ->
+                    async(Dispatchers.IO) {
+                        semaphore.withPermit {
+                            if (tcpReachable(link)) link else null
+                        }
+                    }
+                }.awaitAll()
+            }
+            reachable += results.filterNotNull()
+            if (reachable.size >= MAX_NODES) break
+        }
+        return reachable.take(MAX_NODES)
+    }
+
+    private fun tcpReachable(link: String): Boolean = runCatching {
+        val uri = URI(link.trim())
+        val host = uri.host ?: error("missing host")
+        val port = uri.port
+        require(port in 1..65535)
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(host, port), TCP_PROBE_TIMEOUT_MS)
+            socket.isConnected
+        }
+    }.getOrDefault(false)
 
     private fun nodeIdentity(link: String): String? = runCatching {
         val uri = URI(link.trim())
