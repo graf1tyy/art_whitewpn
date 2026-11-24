@@ -107,6 +107,9 @@ object ArtAutoProfileManager {
         val uniqueLinks = links.sortedBy(::fingerprintRank)
             .distinctBy { nodeIdentity(it) ?: it }
             .filter { compileVless(it) != null }
+        if (uniqueLinks.isEmpty()) {
+            error("Не удалось загрузить поддерживаемые VLESS-конфигурации; текущий профиль ART Auto сохранён.")
+        }
         val reachableLinks = filterTcpReachable(uniqueLinks, physicalNetwork)
         val outbounds = reachableLinks.mapNotNull(::compileVless).take(MAX_NODES)
         Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
