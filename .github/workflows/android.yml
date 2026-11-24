@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: art-vpn-official-build-${{ github.ref }}
+  group: art-vpn-repair-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
