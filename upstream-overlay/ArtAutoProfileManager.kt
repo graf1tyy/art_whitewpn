@@ -42,8 +42,8 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 7
-    private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
+    private const val PROFILE_REVISION = 8
+    private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
     private const val TCP_PROBE_TIMEOUT_MS = 1800
