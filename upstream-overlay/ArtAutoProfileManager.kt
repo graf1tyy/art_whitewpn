@@ -42,7 +42,7 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 5
+    private const val PROFILE_REVISION = 6
     private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
@@ -50,12 +50,15 @@ object ArtAutoProfileManager {
     private const val TCP_PROBE_CONCURRENCY = 32
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-    // Start with the largest independent VLESS feed; the two smaller
-    // white-list feeds are appended as fallbacks, not allowed to crowd it out.
+    // Start with a separately health-checked mobile VLESS bundle. The source
+    // rebuilds its list from measured configs rather than merely aggregating
+    // arbitrary public links. Keep the Russia-focused feeds as additional
+    // candidates, but never let one feed monopolize the pool.
     private val feedGroups = listOf(
         listOf(
-            "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt",
-            "https://raw.githack.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt"
+            "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
+            "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/mini.txt",
+            "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt"
         ),
         listOf(
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -115,6 +118,7 @@ object ArtAutoProfileManager {
         val uniqueLinks = links.sortedBy(::fingerprintRank)
             .distinctBy { nodeIdentity(it) ?: it }
             .filter { compileVless(it) != null }
+            .take(320)
         if (uniqueLinks.isEmpty()) {
             error("Не удалось загрузить поддерживаемые VLESS-конфигурации; текущий профиль ART Auto сохранён.")
         }
