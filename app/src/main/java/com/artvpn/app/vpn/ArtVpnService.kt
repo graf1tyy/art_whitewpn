@@ -147,7 +147,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     sendStatus(ACTION_CONNECTING, progress)
                     try {
                         val config = VpnConfigCompiler.compile(node)
-                        server.checkConfig(config)
+                        Libbox.checkConfig(config)
                         server.startOrReloadService(config, OverrideOptions())
                         delay(350)
 
