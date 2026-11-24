@@ -24,7 +24,7 @@ text = gradle.read_text()
 # The pinned upstream revision declares a not-yet-published Android 37
 # platform. API 36 is stable and is sufficient for this Android 14 client.
 text = text.replace("compileSdk = 37", "compileSdk = 36")
-text = text.replace("    compileSdkMinor = 1\\n", "")
+text = text.replace("    compileSdkMinor = 1\n", "")
 text = text.replace("targetSdk = 37", "targetSdk = 35")
 gradle.write_text(text)
 
