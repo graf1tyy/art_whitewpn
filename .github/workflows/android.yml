@@ -1,4 +1,4 @@
-name: ART VPN — Live server validation
+name: ART VPN — Verified VLESS selection
 
 on:
   push:
@@ -23,11 +23,17 @@ jobs:
         with:
           path: art
 
-      - name: Set up Java 21
+      - name: Set up Go 1.25.5 for patched sing-box core
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.5"
+          cache: false
+
+      - name: Set up Java 17 for gomobile
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "17"
 
       - name: Set up Android SDK tools and NDK
         uses: android-actions/setup-android@v4
@@ -54,6 +60,16 @@ jobs:
           printf 'y\n%.0s' {1..100} | "$SDKMANAGER" --licenses
           test -d "$ANDROID_HOME/platforms/${PLATFORM_PACKAGE#platforms;}"
           echo "Installed $PLATFORM_PACKAGE and $BUILD_TOOLS_PACKAGE"
+
+      - name: Build patched sing-box Android engine
+        shell: bash
+        run: bash art/scripts/build-libbox-art.sh "$GITHUB_WORKSPACE/upstream"
+
+      - name: Set up Java 21 for Android app
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
 
       - name: Set up Gradle 9.7
         uses: gradle/actions/setup-gradle@v4
@@ -98,9 +114,9 @@ jobs:
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: v1.0.2-build.${{ github.run_number }}
+          tag_name: v1.0.3-build.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: ART VPN 1.0.2 — build ${{ github.run_number }}
+          name: ART VPN 1.0.3 — build ${{ github.run_number }}
           prerelease: true
           generate_release_notes: true
           files: art/dist/ART-VPN-arm64.apk
