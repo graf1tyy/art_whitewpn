@@ -42,7 +42,7 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 6
+    private const val PROFILE_REVISION = 7
     private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
@@ -56,9 +56,9 @@ object ArtAutoProfileManager {
     // candidates, but never let one feed monopolize the pool.
     private val feedGroups = listOf(
         listOf(
-            "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
-            "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/mini.txt",
-            "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt"
+            "https://raw.githubusercontent.com/zieng2/wl/main/vless_universal.txt",
+            "https://codeberg.org/zieng2/wl/raw/branch/main/vless_universal.txt",
+            "https://gitlab.com/zieng2/wl/raw/main/vless_universal.txt"
         ),
         listOf(
             "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt",
@@ -308,7 +308,7 @@ object ArtAutoProfileManager {
         require(port in 1..65535)
         val params = query(uri.rawQuery.orEmpty())
         val transport = params["type"].orEmpty().lowercase().let {
-            if (it == "tcp") "" else it
+            if (it == "tcp" || it == "raw") "" else it
         }
         listOf(
             uuid.lowercase(), host, port.toString(),
@@ -333,7 +333,11 @@ object ArtAutoProfileManager {
         val params = query(uri.rawQuery.orEmpty())
         val security = params["security"].orEmpty().lowercase()
         require(security in setOf("", "none", "tls", "reality"))
-        val transportType = params["type"].orEmpty().lowercase()
+        // Several VLESS subscriptions use "raw" for ordinary TCP transport.
+        // sing-box represents that as its default transport (no transport block).
+        val transportType = params["type"].orEmpty().lowercase().let {
+            if (it == "raw") "tcp" else it
+        }
         require(transportType in setOf("", "tcp", "ws", "grpc", "http", "httpupgrade"))
         val flow = params["flow"].orEmpty()
         require(flow.isBlank() || flow == "xtls-rprx-vision")
