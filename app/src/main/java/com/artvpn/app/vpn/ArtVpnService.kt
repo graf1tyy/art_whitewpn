@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.artvpn.app.ArtVpnApplication
 import com.artvpn.app.CrashDiagnostics
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
@@ -140,13 +141,25 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     "Нет серверов для подключения. Сначала обновите список."
                 }
 
-                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:physical-network-monitor")
-                networkMonitor.start()
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:libbox-setup")
+                (application as ArtVpnApplication).ensureLibboxSetup()
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:libbox-setup-complete")
+
                 CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:command-server-create")
                 val server = CommandServer(this@ArtVpnService, this@ArtVpnService)
-                server.start()
+                try {
+                    server.start()
+                    commandServer = server
+                } catch (error: Throwable) {
+                    runCatching { server.close() }
+                    throw error
+                }
                 CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:command-server-started")
-                commandServer = server
+
+                // Match the official Android client: the command server and
+                // libbox setup are ready before registering the physical network.
+                CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:physical-network-monitor")
+                networkMonitor.start()
 
                 var lastFailure = "Сайты не ответили через VPN"
                 for ((index, node) in candidates.withIndex()) {
@@ -386,7 +399,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         return descriptor.fd
     }
 
-    override fun usePlatformAutoDetectInterfaceControl(): Boolean = false
+    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
     override fun autoDetectInterfaceControl(fd: Int) {
         if (!protect(fd)) error("Не удалось защитить VPN-сокет от зацикливания")
@@ -483,7 +496,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun setSystemProxyEnabled(isEnabled: Boolean) = Unit
     override fun triggerNativeCrash() = Unit
     override fun writeDebugMessage(message: String?) {
-        // Keep the Go/JNI logging bridge disabled; diagnostics stay in CrashDiagnostics.
+        Log.d("ARTVPN-singbox", message.orEmpty())
     }
     override fun connectSSHAgent(): Int = -1
 

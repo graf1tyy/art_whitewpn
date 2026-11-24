@@ -88,7 +88,7 @@ object CrashDiagnostics {
             appendLine()
             appendLine("=== RELEVANT LOGCAT ===")
             append(logs)
-        }.takeLast(24000)
+        }.takeLast(50000)
     }
 
     fun clear(context: Context) {
@@ -111,24 +111,43 @@ object CrashDiagnostics {
     private fun readLogcat(): String {
         return try {
             val process = Runtime.getRuntime().exec(
-                arrayOf("logcat", "-d", "-t", "600", "-v", "time")
+                arrayOf("logcat", "-d", "-t", "1800", "-v", "threadtime")
             )
             val raw = process.inputStream.bufferedReader().use { it.readText() }
-            process.waitFor(4, TimeUnit.SECONDS)
-            val relevant = raw.lineSequence().filter { line ->
-                line.contains("ARTVPN", ignoreCase = true) ||
-                    line.contains("AndroidRuntime", ignoreCase = true) ||
-                    line.contains("FATAL EXCEPTION", ignoreCase = true) ||
-                    line.contains("Fatal signal", ignoreCase = true) ||
-                    (line.contains("DEBUG", ignoreCase = true) && line.contains("crash", ignoreCase = true)) ||
-                    line.contains("libbox", ignoreCase = true) ||
-                    line.contains("sing-box", ignoreCase = true)
-            }.toList()
-            (if (relevant.isNotEmpty()) relevant.takeLast(180) else raw.lineSequence().toList().takeLast(100))
-                .joinToString("\n")
-                .ifBlank { "Logcat did not return readable entries." }
+            process.waitFor(5, TimeUnit.SECONDS)
+            val lines = raw.lineSequence().toList()
+
+            // Go's fatal/panic header can precede the libbox stack by dozens of
+            // lines. Keep a contiguous window around SIGABRT instead of filtering
+            // only lines containing "sing-box" and accidentally dropping the cause.
+            val fatalIndex = lines.indexOfLast { line ->
+                val lower = line.lowercase()
+                lower.contains("fatal signal") ||
+                    lower.contains("sigabrt") ||
+                    lower.contains("fatal error:") ||
+                    lower.contains("panic:") ||
+                    lower.contains("runtime:") && lower.contains("fatal")
+            }
+            val selected = if (fatalIndex >= 0) {
+                lines.subList(
+                    (fatalIndex - 260).coerceAtLeast(0),
+                    (fatalIndex + 100).coerceAtMost(lines.size)
+                )
+            } else {
+                lines.filter { line ->
+                    line.contains("ARTVPN", ignoreCase = true) ||
+                        line.contains("AndroidRuntime", ignoreCase = true) ||
+                        line.contains("FATAL EXCEPTION", ignoreCase = true) ||
+                        line.contains("Go", ignoreCase = true) ||
+                        line.contains("libbox", ignoreCase = true) ||
+                        line.contains("sing-box", ignoreCase = true) ||
+                        line.contains("DEBUG", ignoreCase = true)
+                }.takeLast(360)
+            }
+            selected.joinToString("\n").ifBlank { "Logcat did not return readable entries." }
         } catch (error: Throwable) {
             "Unable to read logcat: " + error.javaClass.simpleName + ": " + error.message
         }
     }
 }
+
