@@ -56,6 +56,7 @@ mkdir -p "$GOPATH_DIR/bin"
 export PATH="$GOPATH_DIR/bin:$PATH"
 go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
 go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+gomobile init
 
 # The Go builder copies AARs to ../sing-box-for-android/app/libs when that
 # sibling exists. Use a temporary link so its output lands in this app.
