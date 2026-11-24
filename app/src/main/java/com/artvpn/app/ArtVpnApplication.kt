@@ -14,7 +14,6 @@ class ArtVpnApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashDiagnostics.install(this)
-        CrashDiagnostics.mark(this, "IDLE:application-created")
         runCatching {
             val root = filesDir.resolve("sing-box").apply { mkdirs() }
             val work = cacheDir.resolve("sing-box").apply { mkdirs() }
