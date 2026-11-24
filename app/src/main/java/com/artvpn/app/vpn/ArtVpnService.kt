@@ -386,7 +386,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         return descriptor.fd
     }
 
-    override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+    override fun usePlatformAutoDetectInterfaceControl(): Boolean = false
 
     override fun autoDetectInterfaceControl(fd: Int) {
         if (!protect(fd)) error("Не удалось защитить VPN-сокет от зацикливания")
@@ -483,7 +483,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun setSystemProxyEnabled(isEnabled: Boolean) = Unit
     override fun triggerNativeCrash() = Unit
     override fun writeDebugMessage(message: String?) {
-        Log.d("ARTVPN-singbox", message.orEmpty())
+        // Keep the Go/JNI logging bridge disabled; diagnostics stay in CrashDiagnostics.
     }
     override fun connectSSHAgent(): Int = -1
 

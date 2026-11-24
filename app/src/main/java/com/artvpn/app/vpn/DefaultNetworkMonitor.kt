@@ -97,16 +97,15 @@ internal class DefaultNetworkMonitor(
     /** Called only by sing-box while its native monitor is alive. */
     fun setListener(listener: InterfaceUpdateListener) {
         synchronized(stateLock) {
-            this.listener = listener
-            publishLocked(network ?: findPhysicalNetwork())
+            // Do not retain the Go-backed callback on Android 14. Physical network
+            // selection remains available through ConnectivityManager directly.
+            this.listener = null
         }
     }
 
     /** Detach only the listener instance being closed by sing-box. */
     fun clearListener(expected: InterfaceUpdateListener) {
-        synchronized(stateLock) {
-            if (listener === expected) listener = null
-        }
+        synchronized(stateLock) { listener = null }
     }
 
     /** Stop the Android watcher and invalidate all native callbacks. */

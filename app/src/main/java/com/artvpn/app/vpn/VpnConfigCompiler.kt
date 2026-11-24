@@ -90,7 +90,7 @@ object VpnConfigCompiler {
             .put(outbound)
             .put(JSONObject().put("type", "direct").put("tag", "direct"))
         val config = JSONObject()
-            .put("log", JSONObject().put("level", "warn").put("timestamp", true))
+            .put("log", JSONObject().put("level", "error").put("timestamp", true))
             .put("dns", JSONObject()
                 .put("servers", JSONArray()
                     .put(JSONObject().put("type", "local").put("tag", "local")))
