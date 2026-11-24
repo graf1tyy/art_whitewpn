@@ -42,7 +42,7 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 9
+    private const val PROFILE_REVISION = 10
     private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
@@ -95,6 +95,17 @@ object ArtAutoProfileManager {
         val preferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lastUpdated = preferences.getLong(KEY_UPDATED, 0L)
         val savedRevision = preferences.getInt(KEY_PROFILE_REVISION, 0)
+
+        // ART is a single-purpose VPN: never start an older imported/default
+        // profile just because it remained selected in the upstream database.
+        // This also repairs installations upgraded from builds that left a
+        // non-ART profile selected.
+        if (existing != null && Settings.selectedProfile != existing.id) {
+            Settings.selectedProfile = existing.id
+            Settings.rebuildServiceMode()
+            Log.i(TAG, "Forced ART Auto profile selection id=${existing.id}, serviceMode=${Settings.serviceMode}")
+        }
+
         if (!force && existing != null && savedRevision == PROFILE_REVISION &&
             System.currentTimeMillis() - lastUpdated < REFRESH_INTERVAL) {
             return@withContext
@@ -212,8 +223,13 @@ object ArtAutoProfileManager {
             ProfileManager.create(target, andSelect = true)
         } else {
             ProfileManager.update(target)
-            if (Settings.selectedProfile == -1L) Settings.selectedProfile = target.id
         }
+
+        // ProfileManager.update() deliberately preserves upstream selection.
+        // For ART VPN, the generated ART Auto TUN profile must always be active.
+        Settings.selectedProfile = target.id
+        Settings.rebuildServiceMode()
+        Log.i(TAG, "ART Auto active profile id=${target.id}, serviceMode=${Settings.serviceMode}")
 
         preferences.edit()
             .putLong(KEY_UPDATED, System.currentTimeMillis())
