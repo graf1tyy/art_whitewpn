@@ -15,10 +15,10 @@ import java.net.NetworkInterface
 /**
  * Tracks the physical uplink and exposes it to sing-box.
  *
- * Important: sing-box owns InterfaceUpdateListener. It is valid only between
- * startDefaultInterfaceMonitor() and closeDefaultInterfaceMonitor(). Keeping
- * an old listener after a core reload can call into a released Go object and
- * terminate the process from the network callback thread.
+ * No Go-backed InterfaceUpdateListener is ever invoked inline from
+ * startDefaultInterfaceMonitor(). libbox calls that method through JNI; calling
+ * the listener before returning would re-enter Go on the same cgo stack.
+ * All listener notifications are posted to callbackHandler instead.
  */
 internal class DefaultNetworkMonitor(
     context: Context,
@@ -54,13 +54,16 @@ internal class DefaultNetworkMonitor(
         ) = update(network)
 
         override fun onLost(network: Network) {
+            val replacement: Network?
+            val target: InterfaceUpdateListener?
             synchronized(stateLock) {
                 if (this@DefaultNetworkMonitor.network != network) return
-                val replacement = findPhysicalNetwork(excluding = network)
+                replacement = findPhysicalNetwork(excluding = network)
                 this@DefaultNetworkMonitor.network = replacement
-                onUnderlyingNetworkChanged(replacement)
-                publishLocked(replacement)
+                target = listener
             }
+            onUnderlyingNetworkChanged(replacement)
+            target?.let { dispatchPublish(it, replacement) }
         }
     }
 
@@ -88,18 +91,24 @@ internal class DefaultNetworkMonitor(
         }
 
         val current = findPhysicalNetwork()
-        synchronized(stateLock) {
+        val selected = synchronized(stateLock) {
             if (network == null) network = current
-            onUnderlyingNetworkChanged(network)
+            network
         }
+        onUnderlyingNetworkChanged(selected)
+        listener?.let { dispatchPublish(it, selected) }
     }
 
-    /** Called only by sing-box while its native monitor is alive. */
+    /**
+     * Called from Go while libbox is constructing the service. Store the
+     * Go-backed callback and return immediately; do not call it on this stack.
+     */
     fun setListener(listener: InterfaceUpdateListener) {
-        synchronized(stateLock) {
+        val current = synchronized(stateLock) {
             this.listener = listener
-            publishLocked(network ?: findPhysicalNetwork())
+            network ?: findPhysicalNetwork()
         }
+        dispatchPublish(listener, current)
     }
 
     /** Detach only the listener instance being closed by sing-box. */
@@ -132,7 +141,7 @@ internal class DefaultNetworkMonitor(
     fun currentNetwork(): Network? = network ?: findPhysicalNetwork()
 
     private fun update(candidate: Network) {
-        synchronized(stateLock) {
+        val target = synchronized(stateLock) {
             if (!registered) return
             val capabilities = runCatching {
                 connectivity.getNetworkCapabilities(candidate)
@@ -141,9 +150,10 @@ internal class DefaultNetworkMonitor(
             if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
 
             network = candidate
-            onUnderlyingNetworkChanged(candidate)
-            publishLocked(candidate)
+            listener
         }
+        onUnderlyingNetworkChanged(candidate)
+        target?.let { publish(it, candidate, 0) }
     }
 
     private fun findPhysicalNetwork(excluding: Network? = null): Network? {
@@ -165,38 +175,44 @@ internal class DefaultNetworkMonitor(
         return networks.firstOrNull(::isPhysical)
     }
 
-    /**
-     * NetworkCallback already runs on callbackThread. Deliver the callback
-     * synchronously there, like the official sing-box Android client; do not
-     * enqueue a second callback that could outlive closeDefaultInterfaceMonitor.
-     */
-    private fun publishLocked(candidate: Network?) {
-        val target = listener ?: return
+    private fun dispatchPublish(target: InterfaceUpdateListener, candidate: Network?) {
+        callbackHandler.post {
+            if (listener === target) publish(target, candidate, 0)
+        }
+    }
+
+    /** Runs only on callbackHandler; retries without blocking network events. */
+    private fun publish(target: InterfaceUpdateListener, candidate: Network?, attempt: Int) {
+        if (listener !== target) return
         if (candidate == null) {
             runCatching { target.updateDefaultInterface("", -1, false, false) }
                 .onFailure { Log.w(TAG, "Cannot clear default interface", it) }
             return
         }
 
-        repeat(10) { attempt ->
-            val properties = runCatching {
-                connectivity.getLinkProperties(candidate)
-            }.getOrNull()
-            val name = properties?.interfaceName
-            val index = name?.let {
-                runCatching { NetworkInterface.getByName(it)?.index }.getOrNull()
-            }
-            if (!name.isNullOrBlank() && index != null && index > 0) {
-                runCatching {
-                    target.updateDefaultInterface(name, index, false, false)
-                }.onFailure {
-                    Log.w(TAG, "Cannot publish default interface $name/$index", it)
-                }
-                return
-            }
-            if (attempt < 9) Thread.sleep(100)
+        val properties = runCatching {
+            connectivity.getLinkProperties(candidate)
+        }.getOrNull()
+        val name = properties?.interfaceName
+        val index = name?.let {
+            runCatching { NetworkInterface.getByName(it)?.index }.getOrNull()
         }
-        Log.w(TAG, "Could not resolve physical interface for $candidate")
+        if (!name.isNullOrBlank() && index != null && index > 0) {
+            runCatching {
+                target.updateDefaultInterface(name, index, false, false)
+            }.onFailure {
+                Log.w(TAG, "Cannot publish default interface $name/$index", it)
+            }
+            return
+        }
+
+        if (attempt < 9) {
+            callbackHandler.postDelayed({
+                publish(target, candidate, attempt + 1)
+            }, 100L)
+        } else {
+            Log.w(TAG, "Could not resolve physical interface for $candidate")
+        }
     }
 
     companion object {

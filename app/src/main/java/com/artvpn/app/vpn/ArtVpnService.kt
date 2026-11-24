@@ -10,7 +10,6 @@ import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
-import android.os.Process
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.artvpn.app.ArtVpnApplication
@@ -53,7 +52,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
 import java.net.Proxy
 import java.util.concurrent.TimeUnit
@@ -404,41 +402,15 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
 
     override fun autoDetectInterfaceControl(fd: Int) {
-        // Never throw across the Go/JNI callback boundary. The official
-        // sing-box Android client also delegates directly to VpnService.protect().
-        if (!protect(fd)) Log.e(TAG, "VpnService.protect($fd) returned false")
+        if (!protect(fd)) error("Не удалось защитить VPN-сокет от зацикливания")
     }
 
     override fun findConnectionOwner(
         ipProtocol: Int, sourceAddress: String, sourcePort: Int,
         destinationAddress: String, destinationPort: Int
-    ): ConnectionOwner {
-        val owner = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            try {
-                val uid = getSystemService(ConnectivityManager::class.java)
-                    .getConnectionOwnerUid(
-                        ipProtocol,
-                        InetSocketAddress(sourceAddress, sourcePort),
-                        InetSocketAddress(destinationAddress, destinationPort)
-                    )
-                check(uid != Process.INVALID_UID) { "Connection owner not found" }
-                ConnectionOwner().apply { userId = uid }
-            } catch (error: Exception) {
-                Log.w(TAG, "Android connection-owner lookup failed; using libbox fallback", error)
-                Libbox.findConnectionOwner(
-                    ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort
-                )
-            }
-        } else {
-            Libbox.findConnectionOwner(
-                ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort
-            )
-        }
-        val packages = packageManager.getPackagesForUid(owner.userId)?.toList().orEmpty()
-        owner.userName = packages.firstOrNull().orEmpty()
-        owner.setAndroidPackageNames(StringList(packages))
-        return owner
-    }
+    ): ConnectionOwner = Libbox.findConnectionOwner(
+        ipProtocol, sourceAddress, sourcePort, destinationAddress, destinationPort
+    )
 
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
         // The physical network watcher is started before the core so DNS can
