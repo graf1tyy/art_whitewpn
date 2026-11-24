@@ -137,6 +137,17 @@ mkdir -p "$GOPATH_DIR/bin"
 export PATH="$GOPATH_DIR/bin:$PATH"
 go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
 go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+
+# gomobile needs an explicit NDK path; setup-android only guarantees the SDK
+# root, while the NDK is installed in a versioned directory.
+ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+test -n "$ANDROID_HOME"
+ANDROID_NDK_HOME="${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/28.0.13004108}"
+test -s "$ANDROID_NDK_HOME/source.properties"
+export ANDROID_HOME
+export ANDROID_SDK_HOME="$ANDROID_HOME"
+export ANDROID_NDK_HOME
+export NDK="$ANDROID_NDK_HOME"
 gomobile init
 
 # The Go builder copies AARs to ../sing-box-for-android/app/libs when that
