@@ -116,8 +116,8 @@ dial_select_replacement = """\tif outbound == nil {
 \t\t}
 \t\ts.group.updateAccess.Unlock()
 \t}"""
-assert text.count(dial_select) == 1, "URLTest first candidate selection changed"
-text = text.replace(dial_select, dial_select_replacement, 1)
+assert text.count(dial_select) == 2, "URLTest first candidate selection changed"
+text = text.replace(dial_select, dial_select_replacement)
 
 dial_failure = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
