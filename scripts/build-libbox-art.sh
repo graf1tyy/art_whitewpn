@@ -29,10 +29,9 @@ else
   git -C "$CORE_DIR" checkout --detach "$CORE_TAG"
 fi
 
-# The stock URLTest group falls back to the first configured outbound when it
-# has no successful health-check history. That makes a dead first VLESS node
-# look selected and sends all app traffic into its timeout. ART instead fails
-# closed until at least one outbound completed a real HTTPS URL test.
+# Preserve URLTest's verified-fastest selection, but use a rotating provisional
+# candidate until the first successful HTTPS test. Failed dials rotate to the
+# next candidate instead of pinning the first dead node or black-holing traffic.
 python3 - "$CORE_DIR" <<'PY'
 from pathlib import Path
 import sys
@@ -51,10 +50,24 @@ fallback = """\tif minOutbound == nil {
 \t\treturn nil, false
 \t}"""
 replacement = """\tif minOutbound == nil {
-\t\treturn nil, false
+\t\tcandidates := make([]adapter.Outbound, 0, len(g.outbounds))
+\t\tfor _, detour := range g.outbounds {
+\t\t\tif common.Contains(detour.Network(), network) {
+\t\t\t\tcandidates = append(candidates, detour)
+\t\t\t}
+\t\t}
+\t\tif len(candidates) == 0 {
+\t\t\treturn nil, false
+\t\t}
+\t\tindex := int(g.fallbackCounter.Add(1)-1) % len(candidates)
+\t\treturn candidates[index], false
 \t}"""
 assert text.count(fallback) == 1, "sing-box URLTest fallback changed; refusing an unsafe patch"
 text = text.replace(fallback, replacement, 1)
+
+counter_field = "\tchecking                      atomic.Bool\n"
+assert text.count(counter_field) == 1, "URLTestGroup checking field changed"
+text = text.replace(counter_field, counter_field + "\tfallbackCounter               atomic.Uint64\n", 1)
 
 # Probe the ART pool in two batches rather than five. This shortens first
 # connection setup while preserving full VLESS + TLS + HTTPS health checks.
@@ -75,6 +88,13 @@ dial_replacement = """\ts.logger.ErrorContext(ctx, err)
 \treturn nil, err"""
 assert text.count(dial_failure) == 2, "Unexpected URLTest dial failure handling"
 text = text.replace(dial_failure, dial_replacement)
+
+# Surface health-check failures at WARN level because the ART profile normally
+# runs with sing-box log level=warn. This reveals why candidates were rejected.
+unavailable_log = 'b.logger.Debug("outbound ", tag, " unavailable: ", testResult.err)'
+unavailable_warning = 'b.logger.Warn("outbound ", tag, " unavailable: ", testResult.err)'
+assert text.count(unavailable_log) == 1, "URLTest failure log line changed"
+text = text.replace(unavailable_log, unavailable_warning, 1)
 
 update_check = """func (g *URLTestGroup) performUpdateCheck() {
 \tg.updateAccess.Lock()
@@ -144,7 +164,7 @@ assert text.count(update_check) == 1, "URLTest selection update implementation c
 text = text.replace(update_check, update_replacement, 1)
 
 source.write_text(text)
-print("Patched URLTest: no unverified fallback, stale-selection reset, probe concurrency=32")
+print("Patched URLTest: rotating provisional fallback, stale-selection reset, WARN health diagnostics, probe concurrency=32")
 PY
 
 GOPATH_DIR="$(go env GOPATH)"
