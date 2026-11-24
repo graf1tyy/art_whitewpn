@@ -114,6 +114,59 @@ application.write_text(a)
 # already performed by Application on first start.
 if "ArtAutoProfileWorker" not in a:
     raise SystemExit("ART profile bootstrap was not injected")
+
+# Replace the upstream multi-screen dashboard with a single large ART control.
+# The official VPN service, permission flow, libbox runtime and profile manager
+# remain untouched; the screen verifies actual HTTPS over the active VPN tunnel.
+compose_dir = up / "app/src/main/java/io/nekohasekai/sfa/compose"
+compose_dir.mkdir(parents=True, exist_ok=True)
+(compose_dir / "ArtHomeScreen.kt").write_bytes(
+    (art / "upstream-overlay/ArtHomeScreen.kt").read_bytes()
+)
+
+main_activity = compose_dir / "MainActivity.kt"
+main_text = main_activity.read_text()
+start_marker = "        val scaffoldContent: @Composable (PaddingValues) -> Unit = { paddingValues ->"
+end_marker = "        val crashReportUnreadCount by CrashReportManager.unreadCount.collectAsState()"
+assert main_text.count(start_marker) == 1, "Unexpected MainActivity scaffoldContent layout"
+assert main_text.count(end_marker) == 1, "Unexpected MainActivity scaffold end marker"
+start = main_text.index(start_marker)
+end = main_text.index(end_marker, start)
+simple_content = """        val scaffoldContent: @Composable (PaddingValues) -> Unit = { paddingValues ->
+            ArtHomeScreen(
+                serviceStatus = currentServiceStatus,
+                canConnect = dashboardUiState.selectedProfileId != -1L,
+                modifier = Modifier.fillMaxSize().padding(paddingValues),
+                onConnect = { startService() },
+                onDisconnect = { dashboardViewModel.toggleService() },
+            )
+        }
+
+"""
+main_text = main_text[:start] + simple_content + main_text[end:]
+
+rail_block = """        val useNavigationRail =
+            windowSizeClass.isWidthAtLeastBreakpointCompat(WindowSizeClassCompat.WIDTH_DP_MEDIUM_LOWER_BOUND)"""
+assert main_text.count(rail_block) == 1, "Unexpected adaptive navigation layout"
+main_text = main_text.replace(rail_block, "        val useNavigationRail = false", 1)
+
+# No navigation tabs on the grandma-friendly single-screen build.
+bottom_marker = "bottomBar = {"
+bottom_pos = main_text.index(bottom_marker)
+hide_condition = "if (!isSubScreen) {"
+condition_pos = main_text.find(hide_condition, bottom_pos)
+assert condition_pos >= 0, "Could not locate bottom navigation condition"
+main_text = main_text[:condition_pos] + "if (false && !isSubScreen) {" + main_text[condition_pos + len(hide_condition):]
+
+# Never interrupt first launch with the upstream update-check questionnaire.
+prompt_old = "var showUpdateCheckPrompt by remember { mutableStateOf(!Settings.updateCheckPrompted) }"
+assert main_text.count(prompt_old) == 1, "Unexpected update prompt state"
+main_text = main_text.replace(
+    prompt_old,
+    "var showUpdateCheckPrompt by remember { mutableStateOf(false) }",
+    1
+)
+main_activity.write_text(main_text)
 PY
 
 mkdir -p "$UPSTREAM_DIR/app/libs"
