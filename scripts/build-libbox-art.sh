@@ -65,7 +65,7 @@ replacement = """\tif minOutbound == nil {
 assert text.count(fallback) == 1, "sing-box URLTest fallback changed; refusing an unsafe patch"
 text = text.replace(fallback, replacement, 1)
 
-counter_field = "\tchecking                      atomic.Bool\n"
+counter_field = "\tchecking                     atomic.Bool\n"
 assert text.count(counter_field) == 1, "URLTestGroup checking field changed"
 text = text.replace(counter_field, counter_field + "\tfallbackCounter               atomic.Uint64\n", 1)
 
