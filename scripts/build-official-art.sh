@@ -21,20 +21,6 @@ art = Path(sys.argv[2])
 
 gradle = up / "app/build.gradle.kts"
 text = gradle.read_text()
-# The pinned upstream revision declares a not-yet-published Android 37
-# platform. API 36 is stable and is sufficient for this Android 14 client.
-text = text.replace("compileSdk = 37", "compileSdk = 36")
-text = text.replace("    compileSdkMinor = 1\n", "")
-text = text.replace("targetSdk = 37", "targetSdk = 35")
-gradle.write_text(text)
-
-properties = up / "gradle.properties"
-props = properties.read_text()
-props = props.replace("compileSdkVersion=37", "compileSdkVersion=36")
-props = props.replace("targetSdkVersion=37", "targetSdkVersion=35")
-properties.write_text(props)
-
-text = gradle.read_text()
 old = 'applicationId = "io.nekohasekai.sfa"'
 assert text.count(old) == 1, "Upstream applicationId layout changed"
 gradle.write_text(text.replace(old, 'applicationId = "com.artvpn.app"', 1))
