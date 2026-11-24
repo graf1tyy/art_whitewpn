@@ -394,9 +394,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     "${it.address.hostAddress}/${it.networkPrefixLength}"
                 })
                 dnsServer = StringList(properties.dnsServers.mapNotNull { it.hostAddress })
-                dnsSearchDomain = StringList(
-                    properties.domains?.split(' ')?.filter { it.isNotBlank() }.orEmpty()
-                )
                 gateway = StringList(
                     properties.routes
                         .filter { it.destination.prefixLength == 0 }
