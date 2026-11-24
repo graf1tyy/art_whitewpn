@@ -42,7 +42,7 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 4
+    private const val PROFILE_REVISION = 5
     private const val REFRESH_INTERVAL = 4L * 60 * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 48
@@ -138,7 +138,7 @@ object ArtAutoProfileManager {
                 .put("type", "urltest")
                 .put("tag", "art-auto")
                 .put("outbounds", nodeTags)
-                .put("url", "https://cp.cloudflare.com/generate_204")
+                .put("url", "https://www.gstatic.com/generate_204")
                 .put("interval", "30s")
                 .put("tolerance", 60)
                 .put("interrupt_exist_connections", true)
