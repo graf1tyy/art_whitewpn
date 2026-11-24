@@ -67,9 +67,9 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private val healthClient by lazy {
         OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
-            .connectTimeout(1200, TimeUnit.MILLISECONDS)
-            .readTimeout(1400, TimeUnit.MILLISECONDS)
-            .callTimeout(1600, TimeUnit.MILLISECONDS)
+            .connectTimeout(1000, TimeUnit.MILLISECONDS)
+            .readTimeout(1200, TimeUnit.MILLISECONDS)
+            .callTimeout(1500, TimeUnit.MILLISECONDS)
             .retryOnConnectionFailure(false)
             .build()
     }
@@ -134,7 +134,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                         val config = VpnConfigCompiler.compile(node)
                         server.checkConfig(config)
                         server.startOrReloadService(config, OverrideOptions())
-                        delay(500)
+                        delay(350)
 
                         if (verifyTrafficThroughTunnel() != null) {
                             repository.saveSelected(node.shareLink)
@@ -451,8 +451,8 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
         const val EXTRA_MESSAGE = "message"
         private const val CHANNEL_ID = "artvpn-vpn"
         private const val NOTIFICATION_ID = 41
-        private const val MAX_CONNECTION_CANDIDATES = 3
-        private const val HEALTH_PROBE_TIMEOUT_MS = 1800L
+        private const val MAX_CONNECTION_CANDIDATES = 5
+        private const val HEALTH_PROBE_TIMEOUT_MS = 1600L
         private const val PREFERRED_SUCCESS_TTL_MS = 12L * 60 * 60 * 1000
         private const val FAILURE_COOLDOWN_MS = 6L * 60 * 60 * 1000
 
