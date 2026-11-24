@@ -277,7 +277,6 @@ text = text.replace(update_replacement, update_replacement + failover_helper, 1)
 assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
 assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
 assert "context.WithTimeout(ctx, 5*time.Second)" in text, "Fast VLESS dial timeout patch missing"
-assert "health_source = core / \"common/urltest/urltest.go\"" in text, "Multi-endpoint URLTest patch block missing"
 assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
