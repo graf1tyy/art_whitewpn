@@ -100,7 +100,7 @@ if "ArtAutoProfileManager.installOrRefresh" not in a:
                 }
                 val artRefresh = androidx.work.PeriodicWorkRequestBuilder<
                     io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
-                >(6, java.util.concurrent.TimeUnit.HOURS).build()
+                >(1, java.util.concurrent.TimeUnit.HOURS).build()
                 androidx.work.WorkManager.getInstance(this@Application).enqueueUniquePeriodicWork(
                     "art-auto-profile-refresh",
                     androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
