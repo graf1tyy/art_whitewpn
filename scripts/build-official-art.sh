@@ -47,7 +47,7 @@ manifest.write_text(m)
 
 for file in (up / "app/src/main/res").glob("values*/strings.xml"):
     s = file.read_text()
-    s = re.sub(r'(<string\\s+name="app_name"[^>]*>).*?(</string>)', r'\\1ART VPN\\2', s, flags=re.S)
+    s = re.sub(r'(<string\s+name="app_name"[^>]*>).*?(</string>)', r'\1ART VPN\2', s, flags=re.S)
     file.write_text(s)
 
 # Add an ART-managed VLESS auto profile to the official app without replacing
@@ -69,7 +69,15 @@ if "ArtAutoProfileManager.installOrRefresh" not in a:
                     io.nekohasekai.sfa.artvpn.ArtAutoProfileManager.installOrRefresh(this@Application)
                 }.onFailure {
                     Log.w("ART VPN", "Unable to install automatic server profile: ${it.message}")
-                }''',
+                }
+                val artRefresh = androidx.work.PeriodicWorkRequestBuilder<
+                    io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
+                >(6, java.util.concurrent.TimeUnit.HOURS).build()
+                androidx.work.WorkManager.getInstance(this@Application).enqueueUniquePeriodicWork(
+                    "art-auto-profile-refresh",
+                    androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
+                    artRefresh
+                )''',
         1
     )
 application.write_text(a)

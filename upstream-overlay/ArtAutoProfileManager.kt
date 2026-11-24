@@ -1,7 +1,6 @@
 package io.nekohasekai.sfa.artvpn
 
 import android.content.Context
-import android.util.Base64
 import android.util.Log
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.sfa.database.Profile
@@ -11,7 +10,10 @@ import io.nekohasekai.sfa.database.TypedProfile
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -21,7 +23,6 @@ import java.net.URL
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
-import java.util.concurrent.TimeUnit
 
 /**
  * Creates one native sing-box profile with a urltest outbound group.
@@ -141,17 +142,22 @@ object ArtAutoProfileManager {
         Log.i(TAG, "Installed ART Auto profile with ${outbounds.size} VLESS candidates")
     }
 
-    private suspend fun fetchFirstValid(mirrors: List<String>): List<String> {
-        for (source in mirrors) {
-            val body = runCatching { fetch(source) }.getOrNull() ?: continue
-            val parsed = Regex("(?i)vless://[^\\s\\\"'<>]+")
-                .findAll(body.replace("&amp;", "&"))
-                .map { it.value.trimEnd(',', ';', ')', ']', '.') }
-                .filter { compileVless(it) != null }
-                .toList()
-            if (parsed.isNotEmpty()) return parsed
+    private suspend fun fetchFirstValid(mirrors: List<String>): List<String> = coroutineScope {
+        val found = CompletableDeferred<List<String>>()
+        val jobs = mirrors.map { source ->
+            async {
+                val body = runCatching { fetch(source) }.getOrNull() ?: return@async
+                val parsed = Regex("(?i)vless://[^\\\\s\\\"'<>]+")
+                    .findAll(body.replace("&amp;", "&"))
+                    .map { it.value.trimEnd(',', ';', ')', ']', '.') }
+                    .filter { compileVless(it) != null }
+                    .toList()
+                if (parsed.isNotEmpty()) found.complete(parsed)
+            }
         }
-        return emptyList()
+        val winner = withTimeoutOrNull(7000L) { found.await() }.orEmpty()
+        jobs.forEach { it.cancel() }
+        winner
     }
 
     private fun fetch(source: String): String {
