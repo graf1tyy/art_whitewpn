@@ -191,7 +191,7 @@ def main():
     tags = [x["tag"] for x in nodes]
     hosts = {x["tag"]:f'{x["server"]}:{x["server_port"]}' for x in nodes}
     config = {
-      "log":{"level":"debug","timestamp":True,"disable_color":True},
+      "log":{"level":"debug","timestamp":True},
       "dns":{"servers":[{"type":"local","tag":"local"}],"final":"local"},
       "inbounds":[{"type":"socks","tag":"probe-in","listen":"127.0.0.1","listen_port":PORT}],
       "outbounds":nodes+[{"type":"urltest","tag":"art-auto","outbounds":tags,"url":PROBE_URL,"interval":"30s","tolerance":60,"interrupt_exist_connections":True},{"type":"direct","tag":"direct"}],
