@@ -47,8 +47,89 @@ concurrency = "batch.WithConcurrencyNum[any](10)"
 assert text.count(concurrency) == 1, "sing-box URLTest concurrency changed"
 text = text.replace(concurrency, "batch.WithConcurrencyNum[any](32)", 1)
 
+# A failed DialContext deleted the health history but left the group's selected
+# pointer intact. URLTest.DialContext then reused that stale pointer forever.
+# Re-run selection after a dial failure and clear stale pointers when no tested
+# outbound remains; this is the repeated-same-IP failure seen in ART's log.
+dial_failure = """\ts.logger.ErrorContext(ctx, err)
+\ts.group.history.DeleteURLTestHistory(outbound.Tag())
+\treturn nil, err"""
+dial_replacement = """\ts.logger.ErrorContext(ctx, err)
+\ts.group.history.DeleteURLTestHistory(outbound.Tag())
+\ts.group.performUpdateCheck()
+\treturn nil, err"""
+assert text.count(dial_failure) == 2, "Unexpected URLTest dial failure handling"
+text = text.replace(dial_failure, dial_replacement)
+
+update_check = """func (g *URLTestGroup) performUpdateCheck() {
+\tg.updateAccess.Lock()
+\tdefer g.updateAccess.Unlock()
+\tvar (
+\t\tupdated  bool
+\t\tselected bool
+\t)
+\tif outbound, exists := g.Select(N.NetworkTCP); outbound != nil && (g.selectedOutboundTCP == nil || (exists && outbound != g.selectedOutboundTCP)) {
+\t\tif g.selectedOutboundTCP != nil {
+\t\t\tupdated = true
+\t\t}
+\t\tg.selectedOutboundTCP = outbound
+\t\tselected = true
+\t}
+\tif outbound, exists := g.Select(N.NetworkUDP); outbound != nil && (g.selectedOutboundUDP == nil || (exists && outbound != g.selectedOutboundUDP)) {
+\t\tif g.selectedOutboundUDP != nil {
+\t\t\tupdated = true
+\t\t}
+\t\tg.selectedOutboundUDP = outbound
+\t\tselected = true
+\t}
+\tif updated {
+\t\tg.interruptGroup.Interrupt(g.interruptExternalConnections)
+\t}
+\tif selected {
+\t\tg.history.NotifyUpdated()
+\t}
+}"""
+update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
+\tg.updateAccess.Lock()
+\tdefer g.updateAccess.Unlock()
+\tvar (
+\t\tupdated  bool
+\t\tselected bool
+\t)
+\tif outbound, exists := g.Select(N.NetworkTCP); outbound != nil && (g.selectedOutboundTCP == nil || (exists && outbound != g.selectedOutboundTCP)) {
+\t\tif g.selectedOutboundTCP != nil {
+\t\t\tupdated = true
+\t\t}
+\t\tg.selectedOutboundTCP = outbound
+\t\tselected = true
+\t} else if outbound == nil && g.selectedOutboundTCP != nil {
+\t\tg.selectedOutboundTCP = nil
+\t\tupdated = true
+\t\tselected = true
+\t}
+\tif outbound, exists := g.Select(N.NetworkUDP); outbound != nil && (g.selectedOutboundUDP == nil || (exists && outbound != g.selectedOutboundUDP)) {
+\t\tif g.selectedOutboundUDP != nil {
+\t\t\tupdated = true
+\t\t}
+\t\tg.selectedOutboundUDP = outbound
+\t\tselected = true
+\t} else if outbound == nil && g.selectedOutboundUDP != nil {
+\t\tg.selectedOutboundUDP = nil
+\t\tupdated = true
+\t\tselected = true
+\t}
+\tif updated {
+\t\tg.interruptGroup.Interrupt(g.interruptExternalConnections)
+\t}
+\tif selected {
+\t\tg.history.NotifyUpdated()
+\t}
+}"""
+assert text.count(update_check) == 1, "URLTest selection update implementation changed"
+text = text.replace(update_check, update_replacement, 1)
+
 source.write_text(text)
-print("Patched URLTest: no unverified first-node fallback; probe concurrency=32")
+print("Patched URLTest: no unverified fallback, stale-selection reset, probe concurrency=32")
 PY
 
 GOPATH_DIR="$(go env GOPATH)"
