@@ -42,9 +42,9 @@ jobs:
           test -x "$SDKMANAGER"
           "$SDKMANAGER" --list --channel=3 > "$RUNNER_TEMP/sdk-preview-packages.txt"
           echo "Available Android 37 preview packages:"
-          grep -E 'platforms;android-37([[:space:]]|$)|build-tools;37\.' "$RUNNER_TEMP/sdk-preview-packages.txt" || true
+          grep -E 'platforms;android-37(\.0)?([[:space:]]|$)|build-tools;37\.' "$RUNNER_TEMP/sdk-preview-packages.txt" || true
 
-          PLATFORM_PACKAGE="$(awk -F'|' '/^[[:space:]]*platforms;android-37([[:space:]]|$)/ {gsub(/[[:space:]]/, "", $1); print $1; exit}' "$RUNNER_TEMP/sdk-preview-packages.txt")"
+          PLATFORM_PACKAGE="$(awk -F'|' '/^[[:space:]]*platforms;android-37(\.0)?([[:space:]]|$)/ {gsub(/[[:space:]]/, "", $1); print $1; exit}' "$RUNNER_TEMP/sdk-preview-packages.txt")"
           BUILD_TOOLS_PACKAGE="$(awk -F'|' '/^[[:space:]]*build-tools;37\./ {gsub(/[[:space:]]/, "", $1); print $1}' "$RUNNER_TEMP/sdk-preview-packages.txt" | sort -V | tail -n 1)"
 
           test -n "$PLATFORM_PACKAGE" || { echo "Android API 37 preview package not found in Canary channel" >&2; exit 1; }
@@ -52,7 +52,7 @@ jobs:
 
           printf 'y\n%.0s' {1..100} | "$SDKMANAGER" --channel=3 "$PLATFORM_PACKAGE" "$BUILD_TOOLS_PACKAGE"
           printf 'y\n%.0s' {1..100} | "$SDKMANAGER" --licenses
-          test -d "$ANDROID_HOME/platforms/android-37"
+          test -d "$ANDROID_HOME/platforms/${PLATFORM_PACKAGE#platforms;}"
           echo "Installed $PLATFORM_PACKAGE and $BUILD_TOOLS_PACKAGE"
 
       - name: Set up Gradle 9.7
