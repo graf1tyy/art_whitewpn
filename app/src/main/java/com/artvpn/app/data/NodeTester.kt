@@ -55,7 +55,7 @@ object NodeTester {
         compareBy<VpnNode> { !it.reachable }
             .thenBy { it.pingMs ?: Long.MAX_VALUE }
 
-    private const val MAX_TCP_PROBES = 24
-    private const val MAX_PARALLEL_PROBES = 12
-    private const val CONNECT_TIMEOUT_MS = 1_200
+    private const val MAX_TCP_PROBES = 48
+    private const val MAX_PARALLEL_PROBES = 24
+    private const val CONNECT_TIMEOUT_MS = 900
 }
