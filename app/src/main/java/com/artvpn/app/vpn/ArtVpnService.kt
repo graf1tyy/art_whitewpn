@@ -61,8 +61,22 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     private var tunnel: ParcelFileDescriptor? = null
     private var connectionJob: Job? = null
     private var closing = false
-    private val networkMonitorDelegate = lazy { DefaultNetworkMonitor(this) }
+    private val networkMonitorDelegate = lazy {
+        DefaultNetworkMonitor(this) { underlying ->
+            if (tunnel != null) {
+                runCatching { setUnderlyingNetworks(underlying?.let { arrayOf(it) }) }
+            }
+        }
+    }
     private val networkMonitor by networkMonitorDelegate
+
+    private val networkBootstrapListener = object : InterfaceUpdateListener {
+        override fun updateDefaultInterface(
+            interfaceName: String, interfaceIndex: Int,
+            isExpensive: Boolean, isConstrained: Boolean
+        ) = Unit
+        override fun updateNetworkPath(networkPath: String) = Unit
+    }
 
     private val healthClient by lazy {
         OkHttpClient.Builder()
@@ -121,6 +135,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                     "Нет серверов для подключения. Сначала обновите список."
                 }
 
+                networkMonitor.start(networkBootstrapListener)
                 val server = CommandServer(this@ArtVpnService, this@ArtVpnService)
                 server.start()
                 commandServer = server
