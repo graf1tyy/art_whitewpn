@@ -147,7 +147,7 @@ object ArtAutoProfileManager {
         val jobs = mirrors.map { source ->
             async {
                 val body = runCatching { fetch(source) }.getOrNull() ?: return@async
-                val parsed = Regex("(?i)vless://[^\\\\s\\\"'<>]+")
+                val parsed = Regex("""(?i)vless://[^\s"'<>]+""")
                     .findAll(body.replace("&amp;", "&"))
                     .map { it.value.trimEnd(',', ';', ')', ']', '.') }
                     .filter { compileVless(it) != null }
