@@ -14,6 +14,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import com.artvpn.app.CrashDiagnostics
 import com.artvpn.app.MainActivity
 import com.artvpn.app.R
 import com.artvpn.app.data.NetworkProfile
