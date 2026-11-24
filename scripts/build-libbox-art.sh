@@ -41,6 +41,15 @@ source = core / "protocol/group/urltest.go"
 text = source.read_text()
 
 fallback = """\tif minOutbound == nil {
+\t\tfor _, detour := range g.outbounds {
+\t\t\tif !common.Contains(detour.Network(), network) {
+\t\t\t\tcontinue
+\t\t\t}
+\t\t\treturn detour, false
+\t\t}
+\t\treturn nil, false
+\t}"""
+replacement = """\tif minOutbound == nil {
 \t\tcandidates := make([]adapter.Outbound, 0, len(g.outbounds))
 \t\tvar current adapter.Outbound
 \t\tswitch network {
