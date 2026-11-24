@@ -83,12 +83,15 @@ object ArtAutoProfileManager {
 
         // Bind probes to Wi-Fi/mobile data, never to the VPN being refreshed.
         val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val physicalNetwork = connectivity?.allNetworks?.firstOrNull { network ->
-            val capabilities = connectivity.getNetworkCapabilities(network)
-            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN).not()
-        } ?: connectivity?.activeNetwork?.takeIf { network ->
-            connectivity.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true
+        val physicalNetwork = connectivity?.let { manager ->
+            manager.allNetworks.firstOrNull { network ->
+                val capabilities = manager.getNetworkCapabilities(network)
+                capabilities != null &&
+                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+            } ?: manager.activeNetwork?.takeIf { network ->
+                manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true
+            }
         }
         if (physicalNetwork == null) {
             Log.w(TAG, "No physical network available; keeping the current ART Auto profile")
