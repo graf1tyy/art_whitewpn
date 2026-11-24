@@ -1,55 +1,71 @@
-name: Android
+name: ART VPN — Official sing-box base
+
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: write
+
 concurrency:
-  group: android-release-${{ github.ref }}
+  group: art-vpn-official-build-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout ART project and overlays
+        uses: actions/checkout@v4
+        with:
+          path: art
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
-      - uses: android-actions/setup-android@v4
+          java-version: "21"
+
+      - name: Set up Android SDK 37 and NDK
+        uses: android-actions/setup-android@v4
         with:
-          packages: platform-tools platforms;android-35 build-tools;35.0.0
-      - uses: gradle/actions/setup-gradle@v4
+          packages: platform-tools platforms;android-37 build-tools;37.0.0 ndk;28.0.13004108
+
+      - name: Set up Gradle 9.7
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
-      # Keep the Gradle debug signing certificate stable between builds so
-      # users can install new prereleases as normal app updates.
-      - name: Cache debug signing key
+          gradle-version: "9.7.0"
+
+      # Reuse the exact debug certificate used by earlier ART VPN builds so
+      # this official-engine build can be installed as an update of com.artvpn.app.
+      - name: Restore ART signing key
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: artvpn-debug-keystore-v1
-      - name: Assemble debug APK
-        run: gradle :app:assembleDebug --no-daemon
-      - name: Prepare APK for release
-        run: cp app/build/outputs/apk/debug/app-debug.apk ART-VPN-arm64.apk
-      - uses: actions/upload-artifact@v4
+
+      - name: Build the official Android client with ART overlay
+        run: bash art/scripts/build-official-art.sh "$GITHUB_WORKSPACE/upstream"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
         with:
           name: ART-VPN-arm64
-          path: ART-VPN-arm64.apk
+          path: art/dist/ART-VPN-arm64.apk
           if-no-files-found: error
           retention-days: 14
-      - name: Publish GitHub Release
+
+      - name: Publish ART VPN release
         if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: softprops/action-gh-release@v3
         with:
-          tag_name: v0.4.6-build.${{ github.run_number }}
+          tag_name: v1.0.0-build.${{ github.run_number }}
           target_commitish: ${{ github.sha }}
-          name: ART VPN 0.4.6 — build ${{ github.run_number }}
+          name: ART VPN 1.0.0 — build ${{ github.run_number }}
           prerelease: true
           generate_release_notes: true
-          files: ART-VPN-arm64.apk
+          files: art/dist/ART-VPN-arm64.apk
           fail_on_unmatched_files: true
