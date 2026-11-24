@@ -86,6 +86,7 @@ object ArtAutoProfileManager {
         // the phone before adding them to the profile.
         val uniqueLinks = links.sortedBy(::fingerprintRank)
             .distinctBy { nodeIdentity(it) ?: it }
+            .filter { compileVless(it) != null }
         val reachableLinks = filterTcpReachable(uniqueLinks)
         val outbounds = reachableLinks.mapNotNull(::compileVless).take(MAX_NODES)
         Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
