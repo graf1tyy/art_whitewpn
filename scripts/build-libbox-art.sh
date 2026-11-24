@@ -181,7 +181,7 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$CORE_DIR"
-go run ./cmd/internal/build_libbox -target android
+go run ./cmd/internal/build_libbox -target android -platform android/arm64
 
 test -s "$UPSTREAM_DIR/app/libs/libbox.aar"
 test -s "$UPSTREAM_DIR/app/libs/libbox-legacy.aar"
