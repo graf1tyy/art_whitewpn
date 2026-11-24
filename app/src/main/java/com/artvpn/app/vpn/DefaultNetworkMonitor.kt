@@ -18,7 +18,10 @@ import java.net.NetworkInterface
  * registerDefaultNetworkCallback may report the VPN itself, so use the best
  * matching/requested underlying network where the platform supports it.
  */
-internal class DefaultNetworkMonitor(context: Context) {
+internal class DefaultNetworkMonitor(
+    context: Context,
+    private val onUnderlyingNetworkChanged: (Network?) -> Unit
+) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
         ?: error("ConnectivityManager is unavailable")
     private val handlerThread = HandlerThread("ART-VPN-network").apply { start() }
@@ -39,6 +42,7 @@ internal class DefaultNetworkMonitor(context: Context) {
         override fun onLost(network: Network) {
             if (this@DefaultNetworkMonitor.network == network) {
                 this@DefaultNetworkMonitor.network = findPhysicalNetwork()
+                onUnderlyingNetworkChanged(this@DefaultNetworkMonitor.network)
                 publish(this@DefaultNetworkMonitor.network)
             }
         }
@@ -65,6 +69,7 @@ internal class DefaultNetworkMonitor(context: Context) {
             }
         }
         if (network == null) network = findPhysicalNetwork()
+        onUnderlyingNetworkChanged(network)
         publish(network)
     }
 
@@ -92,20 +97,25 @@ internal class DefaultNetworkMonitor(context: Context) {
         if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
         if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
         network = candidate
+        onUnderlyingNetworkChanged(candidate)
         publish(candidate)
     }
 
     private fun findPhysicalNetwork(): Network? {
-        val networks = runCatching { connectivity.allNetworks.toList() }.getOrDefault(emptyList())
-        return networks.firstOrNull { candidate ->
+        fun isPhysical(candidate: Network): Boolean {
             val caps = runCatching { connectivity.getNetworkCapabilities(candidate) }.getOrNull()
-            caps != null &&
-                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                 !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
                 (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                     caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
         }
+
+        val active = runCatching { connectivity.activeNetwork }.getOrNull()
+        if (active != null && isPhysical(active)) return active
+        val networks = runCatching { connectivity.allNetworks.toList() }.getOrDefault(emptyList())
+        return networks.firstOrNull(::isPhysical)
     }
 
     private fun publish(candidate: Network?) {
