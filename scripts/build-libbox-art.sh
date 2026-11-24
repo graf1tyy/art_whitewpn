@@ -41,16 +41,14 @@ source = core / "protocol/group/urltest.go"
 text = source.read_text()
 
 fallback = """\tif minOutbound == nil {
-\t\tfor _, detour := range g.outbounds {
-\t\t\tif !common.Contains(detour.Network(), network) {
-\t\t\t\tcontinue
-\t\t\t}
-\t\t\treturn detour, false
-\t\t}
-\t\treturn nil, false
-\t}"""
-replacement = """\tif minOutbound == nil {
 \t\tcandidates := make([]adapter.Outbound, 0, len(g.outbounds))
+\t\tvar current adapter.Outbound
+\t\tswitch network {
+\t\tcase N.NetworkTCP:
+\t\t\tcurrent = g.selectedOutboundTCP
+\t\tcase N.NetworkUDP:
+\t\t\tcurrent = g.selectedOutboundUDP
+\t\t}
 \t\tfor _, detour := range g.outbounds {
 \t\t\tif common.Contains(detour.Network(), network) {
 \t\t\t\tcandidates = append(candidates, detour)
@@ -59,15 +57,16 @@ replacement = """\tif minOutbound == nil {
 \t\tif len(candidates) == 0 {
 \t\t\treturn nil, false
 \t\t}
-\t\tindex := int(g.fallbackCounter.Add(1)-1) % len(candidates)
-\t\treturn candidates[index], false
+\t\t// Skip the outbound that just failed; wrap only after trying the pool.
+\t\tif len(candidates) > 1 && current != nil {
+\t\t\tif currentIndex := slices.Index(candidates, current); currentIndex >= 0 {
+\t\t\t\treturn candidates[(currentIndex+1)%len(candidates)], false
+\t\t\t}
+\t\t}
+\t\treturn candidates[0], false
 \t}"""
 assert text.count(fallback) == 1, "sing-box URLTest fallback changed; refusing an unsafe patch"
 text = text.replace(fallback, replacement, 1)
-
-counter_field = "\tchecking                     atomic.Bool\n"
-assert text.count(counter_field) == 1, "URLTestGroup checking field changed"
-text = text.replace(counter_field, counter_field + "\tfallbackCounter               atomic.Uint64\n", 1)
 
 # Probe the ART pool in two batches rather than five. This shortens first
 # connection setup while preserving full VLESS + TLS + HTTPS health checks.
@@ -75,15 +74,48 @@ concurrency = "batch.WithConcurrencyNum[any](10)"
 assert text.count(concurrency) == 1, "sing-box URLTest concurrency changed"
 text = text.replace(concurrency, "batch.WithConcurrencyNum[any](32)", 1)
 
+# Do not make a dead endpoint cost the full upstream 15-second timeout during
+# each initial URLTest wave. Six seconds still allows TLS/HTTPS verification,
+# while keeping automatic selection responsive on mobile networks.
+probe_timeout = "testCtx, cancel := context.WithTimeout(b.ctx, C.TCPTimeout)"
+assert text.count(probe_timeout) == 1, "URLTest probe timeout source changed"
+text = text.replace(probe_timeout, "testCtx, cancel := context.WithTimeout(b.ctx, 6*time.Second)", 1)
+
 # A failed DialContext deleted the health history but left the group's selected
 # pointer intact. URLTest.DialContext then reused that stale pointer forever.
 # Re-run selection after a dial failure and clear stale pointers when no tested
 # outbound remains; this is the repeated-same-IP failure seen in ART's log.
+dial_select = """\tif outbound == nil {
+\t\toutbound, _ = s.group.Select(network)
+\t}"""
+dial_select_replacement = """\tif outbound == nil {
+\t\ts.group.updateAccess.Lock()
+\t\tswitch N.NetworkName(network) {
+\t\tcase N.NetworkTCP:
+\t\t\toutbound = s.group.selectedOutboundTCP
+\t\tcase N.NetworkUDP:
+\t\t\toutbound = s.group.selectedOutboundUDP
+\t\t}
+\t\tif outbound == nil {
+\t\t\toutbound, _ = s.group.Select(network)
+\t\t\tswitch N.NetworkName(network) {
+\t\t\tcase N.NetworkTCP:
+\t\t\t\ts.group.selectedOutboundTCP = outbound
+\t\t\tcase N.NetworkUDP:
+\t\t\t\ts.group.selectedOutboundUDP = outbound
+\t\t\t}
+\t\t}
+\t\ts.group.updateAccess.Unlock()
+\t}"""
+assert text.count(dial_select) == 1, "URLTest first candidate selection changed"
+text = text.replace(dial_select, dial_select_replacement, 1)
+
 dial_failure = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
 \treturn nil, err"""
 dial_replacement = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
+\t// Re-select immediately; the next candidate is used for the next flow.
 \ts.group.performUpdateCheck()
 \treturn nil, err"""
 assert text.count(dial_failure) == 2, "Unexpected URLTest dial failure handling"
@@ -131,7 +163,7 @@ update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
 \t\tupdated  bool
 \t\tselected bool
 \t)
-\tif outbound, exists := g.Select(N.NetworkTCP); outbound != nil && (g.selectedOutboundTCP == nil || (exists && outbound != g.selectedOutboundTCP)) {
+\tif outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {
 \t\tif g.selectedOutboundTCP != nil {
 \t\t\tupdated = true
 \t\t}
@@ -142,7 +174,7 @@ update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
 \t\tupdated = true
 \t\tselected = true
 \t}
-\tif outbound, exists := g.Select(N.NetworkUDP); outbound != nil && (g.selectedOutboundUDP == nil || (exists && outbound != g.selectedOutboundUDP)) {
+\tif outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {
 \t\tif g.selectedOutboundUDP != nil {
 \t\t\tupdated = true
 \t\t}
@@ -163,9 +195,17 @@ update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
 assert text.count(update_check) == 1, "URLTest selection update implementation changed"
 text = text.replace(update_check, update_replacement, 1)
 
+assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
+assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
+assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
+assert "context.WithTimeout(b.ctx, 6*time.Second)" in text
+
 source.write_text(text)
-print("Patched URLTest: rotating provisional fallback, stale-selection reset, WARN health diagnostics, probe concurrency=32")
+print("Patched URLTest: immediate fallback rotation, no repeat of failed node, 6s HTTPS probes, WARN diagnostics")
 PY
+
+cd "$CORE_DIR"
+go test ./protocol/group ./common/urltest
 
 GOPATH_DIR="$(go env GOPATH)"
 mkdir -p "$GOPATH_DIR/bin"
