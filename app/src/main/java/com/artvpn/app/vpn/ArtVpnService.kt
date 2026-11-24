@@ -72,14 +72,6 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     }
     private val networkMonitor by networkMonitorDelegate
 
-    private val networkBootstrapListener = object : InterfaceUpdateListener {
-        override fun updateDefaultInterface(
-            interfaceName: String, interfaceIndex: Int,
-            isExpensive: Boolean, isConstrained: Boolean
-        ) = Unit
-        override fun updateNetworkPath(networkPath: String) = Unit
-    }
-
     private val healthClient by lazy {
         OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)
@@ -149,7 +141,7 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
                 }
 
                 CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:physical-network-monitor")
-                networkMonitor.start(networkBootstrapListener)
+                networkMonitor.start()
                 CrashDiagnostics.mark(this@ArtVpnService, "RUNNING:command-server-create")
                 val server = CommandServer(this@ArtVpnService, this@ArtVpnService)
                 server.start()
@@ -408,13 +400,16 @@ class ArtVpnService : VpnService(), PlatformInterface, CommandServerHandler {
     )
 
     override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-        networkMonitor.start(listener)
+        // The physical network watcher is started before the core so DNS can
+        // resolve the proxy host. The native callback is attached only when
+        // sing-box asks for it.
+        networkMonitor.start()
+        networkMonitor.setListener(listener)
     }
 
     override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener) {
-        // Keep the physical-network watcher alive across core reloads; the
-        // service uses it to update VpnService.setUnderlyingNetworks().
-        networkMonitor.start(networkBootstrapListener)
+        // Never retain a Go-backed listener after the core stops/reloads.
+        networkMonitor.clearListener(listener)
     }
 
     override fun getInterfaces(): NetworkInterfaceIterator {

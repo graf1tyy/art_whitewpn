@@ -2,7 +2,6 @@ package com.artvpn.app.vpn
 
 import android.content.Context
 import android.net.ConnectivityManager
-import android.net.LinkProperties
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
@@ -14,21 +13,27 @@ import io.nekohasekai.libbox.InterfaceUpdateListener
 import java.net.NetworkInterface
 
 /**
- * Tracks the physical uplink used by sing-box. On Android 9+ a plain
- * registerDefaultNetworkCallback may report the VPN itself, so use the best
- * matching/requested underlying network where the platform supports it.
+ * Tracks the physical uplink and exposes it to sing-box.
+ *
+ * Important: sing-box owns InterfaceUpdateListener. It is valid only between
+ * startDefaultInterfaceMonitor() and closeDefaultInterfaceMonitor(). Keeping
+ * an old listener after a core reload can call into a released Go object and
+ * terminate the process from the network callback thread.
  */
 internal class DefaultNetworkMonitor(
     context: Context,
     private val onUnderlyingNetworkChanged: (Network?) -> Unit
 ) {
-    private val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        ?: error("ConnectivityManager is unavailable")
-    private val handlerThread = HandlerThread("ART-VPN-network").apply { start() }
-    private val handler = Handler(handlerThread.looper)
+    private val connectivity =
+        context.applicationContext.getSystemService(ConnectivityManager::class.java)
+            ?: error("ConnectivityManager is unavailable")
+    private val callbackThread = HandlerThread("network-callback").apply { start() }
+    private val callbackHandler = Handler(callbackThread.looper)
+    private val stateLock = Any()
+
     @Volatile private var listener: InterfaceUpdateListener? = null
     @Volatile private var network: Network? = null
-    private var registered = false
+    @Volatile private var registered = false
 
     private val request = NetworkRequest.Builder()
         .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
@@ -37,79 +42,121 @@ internal class DefaultNetworkMonitor(
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) = update(network)
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) = update(network)
-        override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) = update(network)
+
+        override fun onCapabilitiesChanged(
+            network: Network,
+            capabilities: NetworkCapabilities
+        ) = update(network)
+
+        override fun onLinkPropertiesChanged(
+            network: Network,
+            linkProperties: android.net.LinkProperties
+        ) = update(network)
+
         override fun onLost(network: Network) {
-            if (this@DefaultNetworkMonitor.network == network) {
-                this@DefaultNetworkMonitor.network = findPhysicalNetwork()
-                onUnderlyingNetworkChanged(this@DefaultNetworkMonitor.network)
-                publish(this@DefaultNetworkMonitor.network)
+            synchronized(stateLock) {
+                if (this@DefaultNetworkMonitor.network != network) return
+                val replacement = findPhysicalNetwork(excluding = network)
+                this@DefaultNetworkMonitor.network = replacement
+                onUnderlyingNetworkChanged(replacement)
+                publishLocked(replacement)
             }
         }
     }
 
-    @Synchronized
-    fun start(listener: InterfaceUpdateListener) {
-        this.listener = listener
-        if (!registered) {
+    /** Start tracking the physical network without invoking sing-box callbacks. */
+    fun start() {
+        synchronized(stateLock) {
+            if (registered) return
             registered = true
-            try {
-                when {
-                    Build.VERSION.SDK_INT >= 31 ->
-                        connectivity.registerBestMatchingNetworkCallback(request, callback, handler)
-                    Build.VERSION.SDK_INT >= 28 ->
-                        connectivity.requestNetwork(request, callback, handler)
-                    Build.VERSION.SDK_INT >= 26 ->
-                        connectivity.registerDefaultNetworkCallback(callback, handler)
-                    else -> connectivity.registerNetworkCallback(request, callback, handler)
-                }
-            } catch (error: Exception) {
-                registered = false
-                Log.e(TAG, "Cannot register physical network callback", error)
+        }
+
+        try {
+            when {
+                Build.VERSION.SDK_INT >= 31 ->
+                    connectivity.registerBestMatchingNetworkCallback(request, callback, callbackHandler)
+                Build.VERSION.SDK_INT >= 28 ->
+                    connectivity.requestNetwork(request, callback, callbackHandler)
+                Build.VERSION.SDK_INT >= 26 ->
+                    connectivity.registerDefaultNetworkCallback(callback, callbackHandler)
+                else ->
+                    connectivity.registerNetworkCallback(request, callback, callbackHandler)
             }
+        } catch (error: Exception) {
+            synchronized(stateLock) { registered = false }
+            Log.e(TAG, "Cannot register physical network callback", error)
         }
-        if (network == null) network = findPhysicalNetwork()
-        onUnderlyingNetworkChanged(network)
-        publish(network)
+
+        val current = findPhysicalNetwork()
+        synchronized(stateLock) {
+            if (network == null) network = current
+            onUnderlyingNetworkChanged(network)
+        }
     }
 
-    @Synchronized
+    /** Called only by sing-box while its native monitor is alive. */
+    fun setListener(listener: InterfaceUpdateListener) {
+        synchronized(stateLock) {
+            this.listener = listener
+            publishLocked(network ?: findPhysicalNetwork())
+        }
+    }
+
+    /** Detach only the listener instance being closed by sing-box. */
+    fun clearListener(expected: InterfaceUpdateListener) {
+        synchronized(stateLock) {
+            if (listener === expected) listener = null
+        }
+    }
+
+    /** Stop the Android watcher and invalidate all native callbacks. */
     fun stop() {
-        listener = null
-        if (registered) {
-            runCatching { connectivity.unregisterNetworkCallback(callback) }
+        val shouldUnregister = synchronized(stateLock) {
+            listener = null
+            val wasRegistered = registered
             registered = false
+            network = null
+            wasRegistered
         }
-        network = null
+        if (shouldUnregister) {
+            runCatching { connectivity.unregisterNetworkCallback(callback) }
+                .onFailure { Log.w(TAG, "Cannot unregister physical network callback", it) }
+        }
     }
 
-    @Synchronized
     fun close() {
         stop()
-        handlerThread.quitSafely()
+        callbackThread.quitSafely()
     }
 
     fun currentNetwork(): Network? = network ?: findPhysicalNetwork()
 
     private fun update(candidate: Network) {
-        val capabilities = runCatching { connectivity.getNetworkCapabilities(candidate) }.getOrNull()
-            ?: return
-        if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
-        network = candidate
-        onUnderlyingNetworkChanged(candidate)
-        publish(candidate)
+        synchronized(stateLock) {
+            if (!registered) return
+            val capabilities = runCatching {
+                connectivity.getNetworkCapabilities(candidate)
+            }.getOrNull() ?: return
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+            if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) return
+
+            network = candidate
+            onUnderlyingNetworkChanged(candidate)
+            publishLocked(candidate)
+        }
     }
 
-    private fun findPhysicalNetwork(): Network? {
+    private fun findPhysicalNetwork(excluding: Network? = null): Network? {
         fun isPhysical(candidate: Network): Boolean {
-            val caps = runCatching { connectivity.getNetworkCapabilities(candidate) }.getOrNull()
-                ?: return false
-            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
-                (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                    caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
+            if (candidate == excluding) return false
+            val capabilities = runCatching {
+                connectivity.getNetworkCapabilities(candidate)
+            }.getOrNull() ?: return false
+            return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) &&
+                (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
         }
 
         val active = runCatching { connectivity.activeNetwork }.getOrNull()
@@ -118,25 +165,38 @@ internal class DefaultNetworkMonitor(
         return networks.firstOrNull(::isPhysical)
     }
 
-    private fun publish(candidate: Network?) {
+    /**
+     * NetworkCallback already runs on callbackThread. Deliver the callback
+     * synchronously there, like the official sing-box Android client; do not
+     * enqueue a second callback that could outlive closeDefaultInterfaceMonitor.
+     */
+    private fun publishLocked(candidate: Network?) {
         val target = listener ?: return
         if (candidate == null) {
-            target.updateDefaultInterface("", -1, false, false)
+            runCatching { target.updateDefaultInterface("", -1, false, false) }
+                .onFailure { Log.w(TAG, "Cannot clear default interface", it) }
             return
         }
-        handler.post {
-            repeat(10) {
-                val properties = runCatching { connectivity.getLinkProperties(candidate) }.getOrNull()
-                val name = properties?.interfaceName
-                val index = name?.let { runCatching { NetworkInterface.getByName(it)?.index }.getOrNull() }
-                if (!name.isNullOrBlank() && index != null && index > 0) {
-                    runCatching { target.updateDefaultInterface(name, index, false, false) }
-                    return@post
-                }
-                Thread.sleep(100)
+
+        repeat(10) { attempt ->
+            val properties = runCatching {
+                connectivity.getLinkProperties(candidate)
+            }.getOrNull()
+            val name = properties?.interfaceName
+            val index = name?.let {
+                runCatching { NetworkInterface.getByName(it)?.index }.getOrNull()
             }
-            Log.w(TAG, "Could not resolve physical interface for $candidate")
+            if (!name.isNullOrBlank() && index != null && index > 0) {
+                runCatching {
+                    target.updateDefaultInterface(name, index, false, false)
+                }.onFailure {
+                    Log.w(TAG, "Cannot publish default interface $name/$index", it)
+                }
+                return
+            }
+            if (attempt < 9) Thread.sleep(100)
         }
+        Log.w(TAG, "Could not resolve physical interface for $candidate")
     }
 
     companion object {
