@@ -135,6 +135,23 @@ listen_select_replacement = """\ts.group.updateAccess.Lock()
 assert text.count(listen_select) == 1, "URLTest UDP first candidate selection changed"
 text = text.replace(listen_select, listen_select_replacement, 1)
 
+# The stock sing-box dial deadline is 15 seconds. A TCP port can accept
+# connections and still never complete a VLESS/TLS handshake, so the user would
+# wait 15 seconds before failover. Bound each actual candidate attempt to 5s.
+dial_call = """\tconn, err := outbound.DialContext(ctx, network, destination)"""
+dial_call_replacement = """\tdialContext, cancelDial := context.WithTimeout(ctx, 5*time.Second)
+\tconn, err := outbound.DialContext(dialContext, network, destination)
+\tcancelDial()"""
+assert text.count(dial_call) == 1, "URLTest TCP dial anchor changed"
+text = text.replace(dial_call, dial_call_replacement, 1)
+
+packet_call = """\tconn, err := outbound.ListenPacket(ctx, destination)"""
+packet_call_replacement = """\tpacketContext, cancelPacket := context.WithTimeout(ctx, 5*time.Second)
+\tconn, err := outbound.ListenPacket(packetContext, destination)
+\tcancelPacket()"""
+assert text.count(packet_call) == 1, "URLTest UDP dial anchor changed"
+text = text.replace(packet_call, packet_call_replacement, 1)
+
 dial_failure = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
 \treturn nil, err"""
@@ -259,6 +276,8 @@ text = text.replace(update_replacement, update_replacement + failover_helper, 1)
 
 assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
 assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
+assert "context.WithTimeout(ctx, 5*time.Second)" in text, "Fast VLESS dial timeout patch missing"
+assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in health_text, "Multi-endpoint URLTest deadline missing"
 assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
