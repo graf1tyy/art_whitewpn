@@ -55,8 +55,8 @@ gradle.write_text(text)
 
 version = up / "version.properties"
 v = version.read_text()
-v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=750", v)
-v = re.sub(r"(?m)^VERSION_NAME=.*$", "VERSION_NAME=1.0.2", v)
+v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=751", v)
+v = re.sub(r"(?m)^VERSION_NAME=.*$", "VERSION_NAME=1.0.3", v)
 version.write_text(v)
 
 # Keep the ART package and its stable icon, but use the official SFA native VPN
@@ -117,9 +117,14 @@ if "ArtAutoProfileWorker" not in a:
 PY
 
 mkdir -p "$UPSTREAM_DIR/app/libs"
-curl --fail --location --retry 3 \
-  "https://github.com/singbox-android/libbox/releases/download/1.14.4/libbox.aar" \
-  -o "$UPSTREAM_DIR/app/libs/libbox.aar"
+test -s "$UPSTREAM_DIR/app/libs/libbox.aar" || {
+  echo "Patched libbox.aar is missing. Run scripts/build-libbox-art.sh first." >&2
+  exit 1
+}
+test -s "$UPSTREAM_DIR/app/libs/libbox-legacy.aar" || {
+  echo "Patched libbox-legacy.aar is missing. Run scripts/build-libbox-art.sh first." >&2
+  exit 1
+}
 
 cd "$UPSTREAM_DIR"
 ./gradlew :app:assembleOtherDebug --no-daemon --stacktrace
