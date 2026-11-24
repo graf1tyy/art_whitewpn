@@ -119,6 +119,22 @@ dial_select_replacement = """\tif outbound == nil {
 assert text.count(dial_select) == 2, "URLTest first candidate selection changed"
 text = text.replace(dial_select, dial_select_replacement)
 
+# Packet/UDP routing has a separate first-selection path. Persist its provisional
+# candidate too, so a failed QUIC/UDP server is not selected again indefinitely.
+listen_select = """\toutbound := s.group.selectedOutboundUDP
+\tif outbound == nil {
+\t\toutbound, _ = s.group.Select(N.NetworkUDP)
+\t}"""
+listen_select_replacement = """\ts.group.updateAccess.Lock()
+\toutbound := s.group.selectedOutboundUDP
+\tif outbound == nil {
+\t\toutbound, _ = s.group.Select(N.NetworkUDP)
+\t\ts.group.selectedOutboundUDP = outbound
+\t}
+\ts.group.updateAccess.Unlock()"""
+assert text.count(listen_select) == 1, "URLTest UDP first candidate selection changed"
+text = text.replace(listen_select, listen_select_replacement, 1)
+
 dial_failure = """\ts.logger.ErrorContext(ctx, err)
 \ts.group.history.DeleteURLTestHistory(outbound.Tag())
 \treturn nil, err"""
