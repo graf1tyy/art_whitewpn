@@ -1,5 +1,6 @@
 package com.artvpn.app
 import android.app.Application
+import android.os.Build
 import android.util.Log
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
@@ -22,11 +23,13 @@ class ArtVpnApplication : Application() {
                 basePath = root.absolutePath
                 workingPath = work.absolutePath
                 tempPath = temp.absolutePath
+                // Required by sing-box on Android 9+ (Go runtime issue #68760).
+                fixAndroidStack = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
                 commandServerListenPort = 0
                 appVersion = BuildConfig.VERSION_CODE.toString()
                 appMarketingVersion = BuildConfig.VERSION_NAME
                 crashReportSource = "ART VPN"
-                logMaxLines = 300
+                logMaxLines = 3000
             })
             Libbox.setLocale(Locale.getDefault().toLanguageTag())
         }.onFailure { Log.e("ARTVPN", "libbox setup failed", it) }
