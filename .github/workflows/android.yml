@@ -1,4 +1,4 @@
-name: ART VPN — Rotating fallback and diagnostics
+name: ART VPN — End-to-end verified build
 
 on:
   push:
@@ -64,6 +64,13 @@ jobs:
       - name: Build patched sing-box Android engine
         shell: bash
         run: bash art/scripts/build-libbox-art.sh "$GITHUB_WORKSPACE/upstream"
+
+      - name: Build Linux sing-box probe binary
+        working-directory: art/.sing-box-v1.14.4
+        run: go build -trimpath -o "$RUNNER_TEMP/sing-box-probe" ./cmd/sing-box
+
+      - name: Verify VLESS/TLS/Reality and real HTTPS before APK build
+        run: python3 art/scripts/probe-vless.py "$RUNNER_TEMP/sing-box-probe"
 
       - name: Set up Java 21 for Android app
         uses: actions/setup-java@v4
