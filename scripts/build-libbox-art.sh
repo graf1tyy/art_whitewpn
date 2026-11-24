@@ -3,9 +3,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_DIR="${1:?Pass the sing-box-for-android checkout directory}"
+UPSTREAM_REPO="https://github.com/SagerNet/sing-box-for-android.git"
+UPSTREAM_COMMIT="f87c2ebdb7e34754be751bb5e58926db2fed8f8c"
 CORE_DIR="$ROOT/.sing-box-v1.14.4"
 CORE_REPO="https://github.com/SagerNet/sing-box.git"
 CORE_TAG="v1.14.4"
+
+# Prepare the Android source checkout before creating app/libs. The later app
+# overlay script expects this directory to be a Git repository, and fetches
+# the same pinned upstream commit again before applying ART changes.
+if [[ ! -d "$UPSTREAM_DIR/.git" ]]; then
+  if [[ -e "$UPSTREAM_DIR" ]]; then
+    echo "Upstream path exists but is not a Git checkout: $UPSTREAM_DIR" >&2
+    exit 1
+  fi
+  git clone --depth 1 "$UPSTREAM_REPO" "$UPSTREAM_DIR"
+fi
+git -C "$UPSTREAM_DIR" fetch --depth 1 origin "$UPSTREAM_COMMIT"
+git -C "$UPSTREAM_DIR" checkout --detach "$UPSTREAM_COMMIT"
 
 if [[ ! -d "$CORE_DIR/.git" ]]; then
   git clone --depth 1 --branch "$CORE_TAG" "$CORE_REPO" "$CORE_DIR"
