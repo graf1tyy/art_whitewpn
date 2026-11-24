@@ -100,7 +100,8 @@ object ArtAutoProfileManager {
         // profile just because it remained selected in the upstream database.
         // This also repairs installations upgraded from builds that left a
         // non-ART profile selected.
-        if (existing != null && Settings.selectedProfile != existing.id) {
+        val selectionChanged = existing != null && Settings.selectedProfile != existing.id
+        if (selectionChanged) {
             Settings.selectedProfile = existing.id
             Settings.rebuildServiceMode()
             Log.i(TAG, "Forced ART Auto profile selection id=${existing.id}, serviceMode=${Settings.serviceMode}")
@@ -108,6 +109,7 @@ object ArtAutoProfileManager {
 
         if (!force && existing != null && savedRevision == PROFILE_REVISION &&
             System.currentTimeMillis() - lastUpdated < REFRESH_INTERVAL) {
+            if (selectionChanged) reloadRunningService()
             return@withContext
         }
 
@@ -230,12 +232,25 @@ object ArtAutoProfileManager {
         Settings.selectedProfile = target.id
         Settings.rebuildServiceMode()
         Log.i(TAG, "ART Auto active profile id=${target.id}, serviceMode=${Settings.serviceMode}")
+        reloadRunningService()
 
         preferences.edit()
             .putLong(KEY_UPDATED, System.currentTimeMillis())
             .putInt(KEY_PROFILE_REVISION, PROFILE_REVISION)
             .apply()
         Log.i(TAG, "Installed ART Auto profile with ${outbounds.size} unique VLESS candidates (from ${links.size} links)")
+    }
+
+    private fun reloadRunningService() {
+        runCatching {
+            Libbox.newStandaloneCommandClient().serviceReload()
+        }.onSuccess {
+            Log.i(TAG, "Reloaded the active service with the ART Auto profile")
+        }.onFailure {
+            // On a cold start there is no command server yet; the next Connect
+            // starts the selected profile directly.
+            Log.d(TAG, "No running service to reload: ${it.message}")
+        }
     }
 
     private suspend fun fetchFirstValid(mirrors: List<String>): List<String> = coroutineScope {
