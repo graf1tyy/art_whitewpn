@@ -60,13 +60,28 @@ jobs:
         with:
           gradle-version: "9.7.0"
 
-      # Reuse the exact debug certificate used by earlier ART VPN builds so
-      # this official-engine build can be installed as an update of com.artvpn.app.
+      # Cache the explicitly created ART debug key so future APK builds retain the same signer.
       - name: Restore ART signing key
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
-          key: artvpn-debug-keystore-v1
+          key: artvpn-official-debug-keystore-v1
+
+      - name: Create stable ART debug signing key if absent
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          if [[ ! -s "$HOME/.android/debug.keystore" ]]; then
+            keytool -genkeypair -noprompt -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android \
+              -alias androiddebugkey \
+              -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          keytool -list -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey
 
       - name: Build the official Android client with ART overlay
         run: bash art/scripts/build-official-art.sh "$GITHUB_WORKSPACE/upstream"

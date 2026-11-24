@@ -23,11 +23,39 @@ gradle = up / "app/build.gradle.kts"
 text = gradle.read_text()
 old = 'applicationId = "io.nekohasekai.sfa"'
 assert text.count(old) == 1, "Upstream applicationId layout changed"
-gradle.write_text(text.replace(old, 'applicationId = "com.artvpn.app"', 1))
+text = text.replace(old, 'applicationId = "com.artvpn.app"', 1)
+
+# Give ART a deterministic signing identity. The workflow creates and caches
+# this keystore before Gradle runs; all future APKs then use the same signer.
+signing_marker = '    signingConfigs {'
+assert text.count(signing_marker) == 1, "Unexpected upstream signingConfigs layout"
+text = text.replace(
+    signing_marker,
+    signing_marker + '''
+        create("artDebug") {
+            storeFile = file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+''',
+    1
+)
+debug_original = '''        debug {
+            if (getProps("KEYSTORE_PASS").isNotEmpty()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }'''
+debug_replacement = '''        debug {
+            signingConfig = signingConfigs.getByName("artDebug")
+        }'''
+assert text.count(debug_original) == 1, "Unexpected upstream debug signing block"
+text = text.replace(debug_original, debug_replacement, 1)
+gradle.write_text(text)
 
 version = up / "version.properties"
 v = version.read_text()
-v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=747", v)
+v = re.sub(r"(?m)^VERSION_CODE=.*$", "VERSION_CODE=748", v)
 v = re.sub(r"(?m)^VERSION_NAME=.*$", "VERSION_NAME=1.0.0", v)
 version.write_text(v)
 
