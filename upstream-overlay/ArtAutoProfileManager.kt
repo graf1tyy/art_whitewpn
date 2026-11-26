@@ -127,25 +127,38 @@ object ArtAutoProfileManager {
 
         // Bind probes to Wi-Fi/mobile data, never to the VPN being refreshed.
         val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        val physicalNetwork = connectivity?.let { manager ->
-            val usable: (Network) -> Boolean = { network ->
-                val capabilities = manager.getNetworkCapabilities(network)
-                capabilities != null &&
-                    capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-                    !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        // Android may start Application before Wi-Fi/mobile data is registered.
+        // Wait briefly instead of permanently leaving Connect disabled.
+        val physicalNetwork = withTimeoutOrNull(20_000L) {
+            while (true) {
+                val candidate = runCatching {
+                    connectivity?.let { manager ->
+                        val usable: (Network) -> Boolean = { network ->
+                            val capabilities = manager.getNetworkCapabilities(network)
+                            capabilities != null &&
+                                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                                !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                        }
+                        manager.activeNetwork?.takeIf(usable) ?: manager.allNetworks.firstOrNull(usable)
+                    }
+                }.onFailure {
+                    Log.w(TAG, "Unable to inspect Android networks: ${it.message}", it)
+                }.getOrNull()
+                if (candidate != null) return@withTimeoutOrNull candidate
+                delay(500L)
             }
-            // Probe on Android's default physical network first. allNetworks has
-            // no ordering guarantee and may contain a stale Wi-Fi/cellular network.
-            manager.activeNetwork?.takeIf(usable) ?: manager.allNetworks.firstOrNull(usable)
         }
         if (physicalNetwork == null) {
-            Log.w(TAG, "No physical network available; keeping the current ART Auto profile")
-            return@withContext
+            Log.w(TAG, "No physical internet network after 20 seconds; keeping the current ART Auto profile")
+            if (existing != null) return@withContext
+            error("Android не предоставил приложению физическую сеть с доступом в интернет.")
         }
+        Log.i(TAG, "Using physical network for ART feeds and TCP probes")
 
         val feedResults = coroutineScope {
-            feedGroups.map { mirrors -> async { fetchFirstValid(mirrors) } }.awaitAll()
+            feedGroups.map { mirrors -> async { fetchFirstValid(mirrors, physicalNetwork) } }.awaitAll()
         }
+        Log.i(TAG, "Android feeds returned ${feedResults.sumOf { it.size }} links across ${feedResults.count { it.isNotEmpty() }} feed groups")
         // Interleave sources so the largest feed cannot monopolize the first
         // 48 candidates. Each source contributes before any source contributes
         // its second entry; deduplication then removes overlapping endpoints.
@@ -269,12 +282,14 @@ object ArtAutoProfileManager {
         }
     }
 
-    private suspend fun fetchFirstValid(mirrors: List<String>): List<String> = coroutineScope {
+    private suspend fun fetchFirstValid(mirrors: List<String>, network: Network): List<String> = coroutineScope {
         val found = CompletableDeferred<List<String>>()
         val jobs = mirrors.map { source ->
             async {
-                val body = runCatching { fetch(source) }.getOrNull() ?: return@async
-                val parsed = Regex("""(?i)vless://[^\s"'<>]+""")
+                val body = runCatching { fetch(source, network) }.onFailure {
+                    Log.d(TAG, "Feed mirror failed: ${URI(source).host}: ${it.message}")
+                }.getOrNull() ?: return@async
+                val parsed = Regex("""(?i)vless://[^\\s\'"<>]+""")
                     .findAll(body.replace("&amp;", "&"))
                     .map { it.value.trimEnd(',', ';', ')', ']', '.') }
                     .filter { compileVless(it) != null }
@@ -284,11 +299,13 @@ object ArtAutoProfileManager {
         }
         val winner = withTimeoutOrNull(7000L) { found.await() }.orEmpty()
         jobs.forEach { it.cancel() }
+        if (winner.isEmpty()) Log.w(TAG, "No VLESS configurations received from any feed mirror")
         winner
     }
 
-    private fun fetch(source: String): String {
-        val connection = (URL(source).openConnection() as HttpURLConnection).apply {
+    private fun fetch(source: String, network: Network): String {
+        // Downloads must use the physical network, not a previously running VPN.
+        val connection = (network.openConnection(URL(source)) as HttpURLConnection).apply {
             connectTimeout = 3500
             readTimeout = 4500
             instanceFollowRedirects = true
@@ -315,7 +332,6 @@ object ArtAutoProfileManager {
             connection.disconnect()
         }
     }
-
     private fun fingerprintRank(link: String): Int = runCatching {
         when (query(URI(link.trim()).rawQuery.orEmpty())["fp"].orEmpty().lowercase()) {
             "", "chrome" -> 0
