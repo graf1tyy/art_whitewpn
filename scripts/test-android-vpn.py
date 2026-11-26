@@ -115,6 +115,14 @@ def main() -> int:
         raise TimeoutError("Android emulator did not finish booting")
 
     adb("logcat", "-c", check=False)
+    capture_path = Path("/tmp/art-vpn-android-logcat.txt")
+    capture_file = capture_path.open("w", encoding="utf-8")
+    capture_process = subprocess.Popen(
+        ["adb", "logcat", "-v", "time", "-s", "ART-BOOT:V", "ART-AUTO:V", "ART VPN:V", "Application:V", "BoxService:V", "AndroidRuntime:E"],
+        text=True,
+        stdout=capture_file,
+        stderr=subprocess.DEVNULL,
+    )
     adb("install", "-r", str(apk), timeout=180)
     adb("shell", "pm", "grant", PACKAGE, "android.permission.POST_NOTIFICATIONS", check=False)
     adb("shell", "am", "force-stop", PACKAGE)
@@ -165,6 +173,9 @@ def main() -> int:
     if "TRANSPORT_VPN" not in connectivity and "TRANSPORT_VPN" not in vpn_dump:
         raise RuntimeError("App displayed a verified connection, but Android did not report an active VPN transport")
 
+    capture_process.terminate()
+    capture_process.wait(timeout=10)
+    capture_file.close()
     print("PASS: ART VPN installed and launched on Android API 35")
     print("PASS: Android VPN consent accepted and VPN transport is active")
     print("PASS: ART's in-process HTTPS verifier received HTTP 204 through the tunnel")
@@ -177,6 +188,17 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as error:
         print(f"ANDROID VPN TEST FAILED: {error}", file=sys.stderr)
+        try:
+            capture_process.terminate()
+            capture_process.wait(timeout=10)
+            capture_file.close()
+        except (NameError, Exception):
+            pass
+        try:
+            print("--- captured ART logcat (live, not ring-buffer tail) ---", file=sys.stderr)
+            print(Path("/tmp/art-vpn-android-logcat.txt").read_text(encoding="utf-8")[-30000:], file=sys.stderr)
+        except Exception as capture_error:
+            print(f"ART log capture unavailable: {capture_error}", file=sys.stderr)
         for label, args in (
             ("ART process", ("shell", "pidof", PACKAGE)),
             ("Foreground activity", ("shell", "dumpsys", "activity", "activities")),
