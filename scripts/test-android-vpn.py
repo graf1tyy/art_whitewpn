@@ -120,13 +120,16 @@ def main() -> int:
     adb("shell", "am", "start", "-n", ACTIVITY, timeout=30)
 
     def has_action(root: ET.Element, description: str) -> bool:
-        # Compose can expose the accessible label on a child node while
-        # clickability is represented by its parent. The child retains bounds,
-        # so matching by label and tapping its center activates the parent.
-        return any(
-            a.get("content-desc") == description
-            for a in (node.attrib for node in root.iter())
-        )
+        # Compose can expose the accessible label on a child node while the
+        # clickable/enabled state belongs to its parent. Require an enabled
+        # clickable ancestor to avoid treating the disabled preparation button
+        # as an available Connect action.
+        for parent in root.iter():
+            if parent.attrib.get("clickable") != "true" or parent.attrib.get("enabled") != "true":
+                continue
+            if any(child.attrib.get("content-desc") == description for child in parent.iter()):
+                return True
+        return False
 
     # First launch may need one explicit recovery search after network setup.
     # Exercise that built-in path automatically instead of timing out while
@@ -138,12 +141,14 @@ def main() -> int:
             210,
             "ART Auto profile: Connect or Retry server search action",
         )
+        # Prefer the explicit retry action when it is available. A disabled
+        # Connect label can remain visible while profile preparation is running.
         if has_action(root, "Retry server search"):
-            print(f"ART Auto profile not ready; triggering in-app retry {attempt + 1}/3")
+            print(f"ART Auto profile not ready; triggering in-app retry {attempt + 1}/3", flush=True)
             if not tap_node(root, lambda a: a.get("content-desc") == "Retry server search"):
                 raise RuntimeError("Could not tap the accessible Retry server search action")
             continue
-        if tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC):
+        if has_action(root, CONNECT_DESC) and tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC):
             connected_action = True
             break
         raise RuntimeError("Connect action was visible but could not be activated")
