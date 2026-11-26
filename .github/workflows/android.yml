@@ -109,6 +109,17 @@ jobs:
       - name: Build the official Android client with ART overlay
         run: bash art/scripts/build-official-art.sh "$GITHUB_WORKSPACE/upstream"
 
+      - name: Verify Android VPNService, TUN routing and HTTPS on emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim
+          script: python3 art/scripts/test-android-vpn.py art/dist/ART-VPN-universal.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
