@@ -132,11 +132,13 @@ jobs:
           ANDROID_I_WANT_MY_TCG: "yes"
         with:
           api-level: 35
-          # AOSP image is lighter than Google APIs and avoids unrelated Pixel Launcher ANRs.
-          target: default
+          # Android Test Device is optimized for automated UI/service tests and has no heavy Pixel Launcher.
+          target: aosp_atd
           arch: x86_64
           profile: pixel_2
           cores: 4
+          ram-size: 4096M
+          heap-size: 512M
           disable-linux-hw-accel: ${{ steps.kvm.outputs.available != 'true' }}
           emulator-boot-timeout: 600
           disable-animations: true
