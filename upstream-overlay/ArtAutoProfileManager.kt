@@ -129,9 +129,10 @@ object ArtAutoProfileManager {
         val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         // Android may start Application before Wi-Fi/mobile data is registered.
         // Wait briefly instead of permanently leaving Connect disabled.
-        val physicalNetwork = withTimeoutOrNull(20_000L) {
-            while (true) {
-                val candidate = runCatching {
+        val physicalNetwork: Network? = withTimeoutOrNull(20_000L) {
+            var selected: Network? = null
+            while (selected == null) {
+                selected = runCatching {
                     connectivity?.let { manager ->
                         val usable: (Network) -> Boolean = { network ->
                             val capabilities = manager.getNetworkCapabilities(network)
@@ -144,9 +145,9 @@ object ArtAutoProfileManager {
                 }.onFailure {
                     Log.w(TAG, "Unable to inspect Android networks: ${it.message}", it)
                 }.getOrNull()
-                if (candidate != null) return@withTimeoutOrNull candidate
-                delay(500L)
+                if (selected == null) delay(500L)
             }
+            selected
         }
         if (physicalNetwork == null) {
             Log.w(TAG, "No physical internet network after 20 seconds; keeping the current ART Auto profile")
