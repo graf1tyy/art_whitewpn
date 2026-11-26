@@ -14,7 +14,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
 
-MAX_NODES = 48
+MAX_NODES = 96
 PORT = 10808
 PROBE_URL = "https://www.gstatic.com/generate_204"
 PROBE_FALLBACK_URL = "https://cp.cloudflare.com/generate_204"
