@@ -32,7 +32,7 @@ fi
 # Preserve URLTest's verified-fastest selection, but use a rotating provisional
 # candidate until the first successful HTTPS test. Failed dials rotate to the
 # next candidate instead of pinning the first dead node or black-holing traffic.
-python3 - "$CORE_DIR" <<'PY'
+python3 - "$CORE_DIR" "$ROOT/scripts/urltest_art_test.go" <<'PY'
 from pathlib import Path
 import sys
 
@@ -97,25 +97,24 @@ text = text.replace(probe_timeout, "testCtx, cancel := context.WithTimeout(b.ctx
 dial_select = """\tif outbound == nil {
 \t\toutbound, _ = s.group.Select(network)
 \t}"""
-dial_select_replacement = """\tif outbound == nil {
-\t\ts.group.updateAccess.Lock()
+dial_select_replacement = """\ts.group.updateAccess.Lock()
+\tvar outbound adapter.Outbound
+\tswitch N.NetworkName(network) {
+\tcase N.NetworkTCP:
+\t\toutbound = s.group.selectedOutboundTCP
+\tcase N.NetworkUDP:
+\t\toutbound = s.group.selectedOutboundUDP
+\t}
+\tif outbound == nil {
+\t\toutbound, _ = s.group.Select(network)
 \t\tswitch N.NetworkName(network) {
 \t\tcase N.NetworkTCP:
-\t\t\toutbound = s.group.selectedOutboundTCP
+\t\t\ts.group.selectedOutboundTCP = outbound
 \t\tcase N.NetworkUDP:
-\t\t\toutbound = s.group.selectedOutboundUDP
+\t\t\ts.group.selectedOutboundUDP = outbound
 \t\t}
-\t\tif outbound == nil {
-\t\t\toutbound, _ = s.group.Select(network)
-\t\t\tswitch N.NetworkName(network) {
-\t\t\tcase N.NetworkTCP:
-\t\t\t\ts.group.selectedOutboundTCP = outbound
-\t\t\tcase N.NetworkUDP:
-\t\t\t\ts.group.selectedOutboundUDP = outbound
-\t\t\t}
-\t\t}
-\t\ts.group.updateAccess.Unlock()
-\t}"""
+\t}
+\ts.group.updateAccess.Unlock()"""
 assert text.count(dial_select) == 2, "URLTest first candidate selection changed"
 text = text.replace(dial_select, dial_select_replacement)
 
@@ -281,11 +280,16 @@ assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the pr
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
 assert "context.WithTimeout(b.ctx, 6*time.Second)" in text
+assert "s.group.updateAccess.Lock()" in dial_select_replacement
 
 # URLTest must not depend on a single health-check host: mobile operators
 # and networks can filter gstatic while allowing other HTTPS destinations.
 health_source = core / "common/urltest/urltest.go"
 health_text = health_source.read_text()
+import_anchor = 'import (\\n\\t"context"\\n\\t"crypto/tls"'
+import_replacement = 'import (\\n\\t"context"\\n\\t"crypto/tls"\\n\\t"fmt"'
+assert health_text.count(import_anchor) == 1, "URLTest import block changed"
+health_text = health_text.replace(import_anchor, import_replacement, 1)
 old_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) (uint16, error) {
 \tmultiplexOutbound, isMultiplexOutbound := common.Cast[adapter.OutboundWithMultiplex](detour)
 \tif isMultiplexOutbound && multiplexOutbound.MultiplexEnabled() {
@@ -341,8 +345,26 @@ new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) 
 }"""
 assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in new_health, "Multi-endpoint URLTest deadline missing"
 assert health_text.count(old_health) == 1, "sing-box URLTest function changed; refusing unsafe patch"
+assert "resp.StatusCode != http.StatusNoContent" in health_text or "status_after" in locals()
 health_text = health_text.replace(old_health, new_health, 1)
+
+# A successful TCP/TLS handshake is not enough: only the dedicated no-content
+# health response is considered proof of usable outbound internet.
+status_before = """\tresp.Body.Close()
+\tt = uint16(time.Since(start) / time.Millisecond)"""
+status_after = """\tresp.Body.Close()
+\tif resp.StatusCode != http.StatusNoContent {
+\t\treturn 0, fmt.Errorf("health check returned HTTP %d, expected 204", resp.StatusCode)
+\t}
+\tt = uint16(time.Since(start) / time.Millisecond)"""
+assert health_text.count(status_before) == 1, "URLTest HTTP status anchor changed"
+health_text = health_text.replace(status_before, status_after, 1)
 health_source.write_text(health_text)
+
+# Add executable regression tests for success, captive portal and HTTP error responses.
+test_source = Path(sys.argv[2])
+test_destination = core / "common/urltest/urltest_art_test.go"
+test_destination.write_bytes(test_source.read_bytes())
 
 source.write_text(text)
 print("Patched URLTest: bounded multi-endpoint HTTPS fallback, guarded failover, 6s total probe deadline, WARN diagnostics")
