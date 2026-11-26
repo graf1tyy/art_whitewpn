@@ -65,6 +65,17 @@ def wait_for(predicate, timeout: float, description: str) -> ET.Element:
         last_root = ui_tree()
         if last_root is not None and predicate(last_root):
             return last_root
+        # The Google Pixel system image can show an unrelated launcher ANR
+        # under load. Choose "Wait" and keep observing; an ART VPN ANR is not
+        // ignored and will still fail the test.
+        if last_root is not None and contains_text(last_root, "Pixel Launcher isn't responding"):
+            if tap_node(
+                last_root,
+                lambda a: a.get("text", "").strip().lower() == "wait"
+                and a.get("clickable") == "true",
+            ):
+                time.sleep(2)
+                continue
         time.sleep(1)
     last_ui = ET.tostring(last_root, encoding="unicode") if last_root is not None else "unavailable"
     raise TimeoutError(f"Timed out waiting for {description}; last UI: {last_ui}")
@@ -139,8 +150,19 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except Exception as error:
         print(f"ANDROID VPN TEST FAILED: {error}", file=sys.stderr)
+        for label, args in (
+            ("ART process", ("shell", "pidof", PACKAGE)),
+            ("Foreground activity", ("shell", "dumpsys", "activity", "activities")),
+            ("Window focus", ("shell", "dumpsys", "window", "windows")),
+        ):
+            try:
+                print(f"--- {label} ---", file=sys.stderr)
+                print(adb(*args, timeout=30, check=False)[-6000:], file=sys.stderr)
+            except Exception as diagnostic_error:
+                print(f"{label} unavailable: {diagnostic_error}", file=sys.stderr)
         try:
-            print(adb("logcat", "-d", "-t", "1000", "-v", "time", timeout=30, check=False)[-20000:], file=sys.stderr)
+            print("--- logcat ---", file=sys.stderr)
+            print(adb("logcat", "-d", "-t", "2000", "-v", "time", timeout=30, check=False)[-30000:], file=sys.stderr)
         except Exception:
             pass
         raise
