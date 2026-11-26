@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 PACKAGE = "com.artvpn.app"
-ACTIVITY = "io.nekohasekai.sfa/.compose.MainActivity"
+ACTIVITY = "com.artvpn.app/io.nekohasekai.sfa.compose.MainActivity"
 STATUS_TEXT = "Подключено · интернет проверен"
 CONNECT_DESC = "Connect VPN"
 VPN_DIALOG_BUTTONS = {"OK", "Allow", "Start", "Разрешить", "ОК"}
