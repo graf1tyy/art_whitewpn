@@ -97,36 +97,51 @@ dest.mkdir(parents=True, exist_ok=True)
 application = up / "app/src/main/java/io/nekohasekai/sfa/Application.kt"
 a = application.read_text()
 if "ArtAutoProfileManager.installOrRefresh" not in a:
-    needle = "                setupLibbox()"
-    assert a.count(needle) == 1, "Unexpected setupLibbox location"
-    a = a.replace(
-        needle,
-        needle + '''
+    needle = """            runCatching {
+                setupLibbox()
+            }.onFailure {
+                Log.w("Application", "setup libbox: ${it.message}")
+            }"""
+    assert a.count(needle) == 1, "Unexpected upstream libbox bootstrap location"
+    replacement = """            val artLibboxSetup = runCatching { setupLibbox() }
+            if (artLibboxSetup.isSuccess) {
+                Log.i("ART-BOOT", "libbox setup completed")
                 runCatching {
+                    Log.i("ART-BOOT", "starting initial ART Auto profile discovery")
                     io.nekohasekai.sfa.artvpn.ArtAutoProfileManager.installOrRefresh(this@Application)
+                }.onSuccess {
+                    Log.i("ART-BOOT", "initial ART Auto profile discovery completed")
                 }.onFailure {
-                    Log.w("ART VPN", "Unable to install automatic server profile: ${it.message}", it)
+                    Log.e("ART-BOOT", "initial ART Auto profile discovery failed", it)
                 }
-                val artRefresh = androidx.work.PeriodicWorkRequestBuilder<
-                    io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
-                >(1, java.util.concurrent.TimeUnit.HOURS).build()
-                androidx.work.WorkManager.getInstance(this@Application).enqueueUniquePeriodicWork(
-                    "art-auto-profile-refresh",
-                    androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
-                    artRefresh
-                )
-                // A physical network can appear shortly after Application.onCreate.
-                // Retry bootstrap once; revision checks make successful installs a no-op.
-                val artBootstrapRetry = androidx.work.OneTimeWorkRequestBuilder<
-                    io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
-                >().setInitialDelay(20, java.util.concurrent.TimeUnit.SECONDS).build()
-                androidx.work.WorkManager.getInstance(this@Application).enqueueUniqueWork(
-                    "art-auto-profile-bootstrap-retry",
-                    androidx.work.ExistingWorkPolicy.KEEP,
-                    artBootstrapRetry
-                )''',
-        1
-    )
+                runCatching {
+                    val artRefresh = androidx.work.PeriodicWorkRequestBuilder<
+                        io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
+                    >(1, java.util.concurrent.TimeUnit.HOURS).build()
+                    androidx.work.WorkManager.getInstance(this@Application).enqueueUniquePeriodicWork(
+                        "art-auto-profile-refresh",
+                        androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
+                        artRefresh
+                    )
+                    // A physical network can appear shortly after Application.onCreate.
+                    // Retry bootstrap once; revision checks make successful installs a no-op.
+                    val artBootstrapRetry = androidx.work.OneTimeWorkRequestBuilder<
+                        io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
+                    >().setInitialDelay(20, java.util.concurrent.TimeUnit.SECONDS).build()
+                    androidx.work.WorkManager.getInstance(this@Application).enqueueUniqueWork(
+                        "art-auto-profile-bootstrap-retry",
+                        androidx.work.ExistingWorkPolicy.KEEP,
+                        artBootstrapRetry
+                    )
+                    Log.i("ART-BOOT", "automatic hourly refresh and startup retry scheduled")
+                }.onFailure {
+                    Log.e("ART-BOOT", "failed to schedule ART profile refresh", it)
+                }
+            } else {
+                val error = artLibboxSetup.exceptionOrNull()
+                if (error != null) Log.e("ART-BOOT", "libbox setup failed; ART discovery skipped", error)
+            }""";
+    a = a.replace(needle, replacement, 1)
 application.write_text(a)
 
 # Schedule automatic server-list refresh every six hours, with the first import
