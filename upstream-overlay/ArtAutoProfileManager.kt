@@ -18,7 +18,9 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
@@ -42,13 +44,14 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 10
+    private const val PROFILE_REVISION = 11
     private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
-    private const val MAX_NODES = 48
+    private const val MAX_NODES = 96
     private const val TCP_PROBE_TIMEOUT_MS = 1800
     private const val TCP_PROBE_CONCURRENCY = 32
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+    private val refreshLock = Mutex()
     private val supportedFingerprints = setOf(
         "chrome", "chrome_psk", "chrome_psk_shuffle", "chrome_padding_psk_shuffle",
         "chrome_pq", "chrome_pq_psk", "firefox", "edge", "safari", "360",
@@ -88,13 +91,22 @@ object ArtAutoProfileManager {
         )
     )
 
-    suspend fun installOrRefresh(context: Context, force: Boolean = false) = withContext(Dispatchers.IO) {
+    suspend fun installOrRefresh(context: Context, force: Boolean = false) = refreshLock.withLock {
+        withContext(Dispatchers.IO) {
         val app = context.applicationContext
         val profiles = ProfileManager.list()
         val existing = profiles.firstOrNull { it.name == PROFILE_NAME }
         val preferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lastUpdated = preferences.getLong(KEY_UPDATED, 0L)
         val savedRevision = preferences.getInt(KEY_PROFILE_REVISION, 0)
+
+        // Never let a stale third-party/default profile run while ART is still
+        // preparing its first server set. A failed first import leaves Connect disabled.
+        if (existing == null && Settings.selectedProfile != -1L) {
+            Settings.selectedProfile = -1L
+            Settings.rebuildServiceMode()
+            Log.i(TAG, "Cleared the non-ART profile while preparing ART Auto")
+        }
 
         // ART is a single-purpose VPN: never start an older imported/default
         // profile just because it remained selected in the upstream database.
@@ -116,14 +128,15 @@ object ArtAutoProfileManager {
         // Bind probes to Wi-Fi/mobile data, never to the VPN being refreshed.
         val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val physicalNetwork = connectivity?.let { manager ->
-            manager.allNetworks.firstOrNull { network ->
+            val usable: (Network) -> Boolean = { network ->
                 val capabilities = manager.getNetworkCapabilities(network)
                 capabilities != null &&
                     capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
                     !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            } ?: manager.activeNetwork?.takeIf { network ->
-                manager.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) != true
             }
+            // Probe on Android's default physical network first. allNetworks has
+            // no ordering guarantee and may contain a stale Wi-Fi/cellular network.
+            manager.activeNetwork?.takeIf(usable) ?: manager.allNetworks.firstOrNull(usable)
         }
         if (physicalNetwork == null) {
             Log.w(TAG, "No physical network available; keeping the current ART Auto profile")
@@ -156,10 +169,12 @@ object ArtAutoProfileManager {
         Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
         if (outbounds.isEmpty()) {
             if (existing != null) {
-                ProfileManager.delete(existing)
-                if (Settings.selectedProfile == existing.id) Settings.selectedProfile = -1L
+                // A temporary carrier outage or feed change must not destroy the
+                // last-known profile. Keep it selected and let the user retry later.
+                Log.w(TAG, "No TCP-reachable VLESS candidates; keeping the previous ART Auto profile")
+                return@withContext
             }
-            error("Не найдено VLESS-серверов с доступным TCP-портом. Профиль ART Auto удалён, чтобы не показывать ложное подключение.")
+            error("Не найдено VLESS-серверов с доступным TCP-портом. Существующий профиль не удалён.")
         }
 
         val nodeTags = JSONArray()
@@ -239,6 +254,7 @@ object ArtAutoProfileManager {
             .putInt(KEY_PROFILE_REVISION, PROFILE_REVISION)
             .apply()
         Log.i(TAG, "Installed ART Auto profile with ${outbounds.size} unique VLESS candidates (from ${links.size} links)")
+        }
     }
 
     private fun reloadRunningService() {
