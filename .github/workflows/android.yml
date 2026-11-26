@@ -109,19 +109,34 @@ jobs:
       - name: Build the official Android client with ART overlay
         run: bash art/scripts/build-official-art.sh "$GITHUB_WORKSPACE/upstream"
 
+      - name: Enable KVM access for the Android emulator
+        id: kvm
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+          fi
+          if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "KVM is available; emulator will use hardware acceleration"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "KVM is unavailable; emulator will use the explicit TCG fallback"
+          fi
+
       - name: Verify Android VPNService, TUN routing and HTTPS on emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         env:
-          # This hosted Linux runner has no KVM. Android Emulator aborts with
-          # "-accel off" unless QEMU TCG is explicitly allowed.
+          # Used only when KVM is unavailable; does not disable hardware acceleration.
           ANDROID_I_WANT_MY_TCG: "yes"
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_6
-          disable-linux-hw-accel: true
-          emulator-boot-timeout: 900
+          disable-linux-hw-accel: ${{ steps.kvm.outputs.available != 'true' }}
+          emulator-boot-timeout: 600
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
           script: python3 art/scripts/test-android-vpn.py art/dist/ART-VPN-universal.apk
