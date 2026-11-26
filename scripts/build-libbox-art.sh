@@ -94,16 +94,30 @@ text = text.replace(probe_timeout, "testCtx, cancel := context.WithTimeout(b.ctx
 # pointer intact. URLTest.DialContext then reused that stale pointer forever.
 # Re-run selection after a dial failure and clear stale pointers when no tested
 # outbound remains; this is the repeated-same-IP failure seen in ART's log.
-dial_select = """\tif outbound == nil {
-\t\toutbound, _ = s.group.Select(network)
-\t}"""
-dial_select_replacement = """\ts.group.updateAccess.Lock()
+dial_selection = """\ts.group.Touch()
 \tvar outbound adapter.Outbound
 \tswitch N.NetworkName(network) {
 \tcase N.NetworkTCP:
 \t\toutbound = s.group.selectedOutboundTCP
 \tcase N.NetworkUDP:
 \t\toutbound = s.group.selectedOutboundUDP
+\tdefault:
+\t\treturn nil, E.Extend(N.ErrUnknownNetwork, network)
+\t}
+\tif outbound == nil {
+\t\toutbound, _ = s.group.Select(network)
+\t}"""
+dial_selection_replacement = """\ts.group.Touch()
+\tvar outbound adapter.Outbound
+\ts.group.updateAccess.Lock()
+\tswitch N.NetworkName(network) {
+\tcase N.NetworkTCP:
+\t\toutbound = s.group.selectedOutboundTCP
+\tcase N.NetworkUDP:
+\t\toutbound = s.group.selectedOutboundUDP
+\tdefault:
+\t\ts.group.updateAccess.Unlock()
+\t\treturn nil, E.Extend(N.ErrUnknownNetwork, network)
 \t}
 \tif outbound == nil {
 \t\toutbound, _ = s.group.Select(network)
@@ -115,8 +129,8 @@ dial_select_replacement = """\ts.group.updateAccess.Lock()
 \t\t}
 \t}
 \ts.group.updateAccess.Unlock()"""
-assert text.count(dial_select) == 2, "URLTest first candidate selection changed"
-text = text.replace(dial_select, dial_select_replacement)
+assert text.count(dial_selection) == 1, "URLTest dial selection block changed"
+text = text.replace(dial_selection, dial_selection_replacement, 1)
 
 # Packet/UDP routing has a separate first-selection path. Persist its provisional
 # candidate too, so a failed QUIC/UDP server is not selected again indefinitely.
@@ -280,7 +294,7 @@ assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the pr
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
 assert "context.WithTimeout(b.ctx, 6*time.Second)" in text
-assert "s.group.updateAccess.Lock()" in dial_select_replacement
+assert "s.group.updateAccess.Lock()" in dial_selection_replacement
 
 # URLTest must not depend on a single health-check host: mobile operators
 # and networks can filter gstatic while allowing other HTTPS destinations.
