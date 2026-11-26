@@ -120,8 +120,11 @@ def main() -> int:
     adb("shell", "am", "start", "-n", ACTIVITY, timeout=30)
 
     def has_action(root: ET.Element, description: str) -> bool:
+        # Compose can expose the accessible label on a child node while
+        # clickability is represented by its parent. The child retains bounds,
+        # so matching by label and tapping its center activates the parent.
         return any(
-            a.get("content-desc") == description and a.get("clickable") == "true"
+            a.get("content-desc") == description
             for a in (node.attrib for node in root.iter())
         )
 
@@ -137,10 +140,10 @@ def main() -> int:
         )
         if has_action(root, "Retry server search"):
             print(f"ART Auto profile not ready; triggering in-app retry {attempt + 1}/3")
-            if not tap_node(root, lambda a: a.get("content-desc") == "Retry server search" and a.get("clickable") == "true"):
+            if not tap_node(root, lambda a: a.get("content-desc") == "Retry server search"):
                 raise RuntimeError("Could not tap the accessible Retry server search action")
             continue
-        if tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC and a.get("clickable") == "true"):
+        if tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC):
             connected_action = True
             break
         raise RuntimeError("Connect action was visible but could not be activated")
