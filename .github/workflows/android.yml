@@ -111,13 +111,19 @@ jobs:
 
       - name: Verify Android VPNService, TUN routing and HTTPS on emulator
         uses: ReactiveCircus/android-emulator-runner@v2
+        env:
+          # This hosted Linux runner has no KVM. Android Emulator aborts with
+          # "-accel off" unless QEMU TCG is explicitly allowed.
+          ANDROID_I_WANT_MY_TCG: "yes"
         with:
           api-level: 35
           target: google_apis
           arch: x86_64
           profile: pixel_6
+          disable-linux-hw-accel: true
+          emulator-boot-timeout: 900
           disable-animations: true
-          emulator-options: -no-window -no-audio -no-boot-anim
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim
           script: python3 art/scripts/test-android-vpn.py art/dist/ART-VPN-universal.apk
 
       - name: Upload APK artifact
