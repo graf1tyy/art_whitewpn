@@ -385,13 +385,16 @@ print("Patched URLTest: bounded multi-endpoint HTTPS fallback, guarded failover,
 PY
 
 cd "$CORE_DIR"
-go test ./protocol/group ./common/urltest
+echo "[ART-BUILD] Running URLTest regression tests (3 minute limit)"
+go test -timeout 3m ./protocol/group ./common/urltest
 
 GOPATH_DIR="$(go env GOPATH)"
 mkdir -p "$GOPATH_DIR/bin"
 export PATH="$GOPATH_DIR/bin:$PATH"
-go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
-go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
+echo "[ART-BUILD] Installing gomobile (10 minute limit)"
+timeout 10m go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
+echo "[ART-BUILD] Installing gobind (10 minute limit)"
+timeout 10m go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
 
 # gomobile needs an explicit NDK path; setup-android only guarantees the SDK
 # root, while the NDK is installed in a versioned directory.
@@ -403,7 +406,8 @@ export ANDROID_HOME
 export ANDROID_SDK_HOME="$ANDROID_HOME"
 export ANDROID_NDK_HOME
 export NDK="$ANDROID_NDK_HOME"
-gomobile init
+echo "[ART-BUILD] Initializing gomobile (3 minute limit)"
+timeout 3m gomobile init
 
 # The Go builder copies AARs to ../sing-box-for-android/app/libs when that
 # sibling exists. Use a temporary link so its output lands in this app.
@@ -421,7 +425,8 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$CORE_DIR"
-go run ./cmd/internal/build_libbox -target android -platform android/arm64
+echo "[ART-BUILD] Building Android ARM64 libbox AAR (20 minute limit)"
+timeout 20m go run ./cmd/internal/build_libbox -target android -platform android/arm64
 
 test -s "$UPSTREAM_DIR/app/libs/libbox.aar"
 test -s "$UPSTREAM_DIR/app/libs/libbox-legacy.aar"
