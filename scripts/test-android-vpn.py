@@ -67,7 +67,7 @@ def wait_for(predicate, timeout: float, description: str) -> ET.Element:
             return last_root
         # The Google Pixel system image can show an unrelated launcher ANR
         # under load. Choose "Wait" and keep observing; an ART VPN ANR is not
-        // ignored and will still fail the test.
+        # ignored and will still fail the test.
         if last_root is not None and contains_text(last_root, "Pixel Launcher isn't responding"):
             if tap_node(
                 last_root,
