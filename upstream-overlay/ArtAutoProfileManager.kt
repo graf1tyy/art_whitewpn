@@ -19,14 +19,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.URI
 import java.net.URL
 import java.net.URLDecoder
@@ -44,12 +40,10 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 11
+    private const val PROFILE_REVISION = 12
     private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
     private const val MAX_NODES = 96
-    private const val TCP_PROBE_TIMEOUT_MS = 1800
-    private const val TCP_PROBE_CONCURRENCY = 32
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val refreshLock = Mutex()
     private val supportedFingerprints = setOf(
@@ -181,9 +175,12 @@ object ArtAutoProfileManager {
             Log.e(TAG, "No supported VLESS configs parsed: links=${links.size}, feedGroups=${feedResults.count { it.isNotEmpty() }}")
             error("Не удалось загрузить поддерживаемые VLESS-конфигурации; текущий профиль ART Auto сохранён.")
         }
-        val reachableLinks = filterTcpReachable(uniqueLinks, physicalNetwork)
-        val outbounds = reachableLinks.mapNotNull(::compileVless).take(MAX_NODES)
-        Log.i(TAG, "Server scan: links=${links.size}, unique=${uniqueLinks.size}, tcpReachable=${reachableLinks.size}")
+        // Do not gate profile creation on a large batch of bare TCP/DNS pings.
+        // They are not evidence of working VLESS/TLS, and Android DNS lookups can
+        // stall on restricted mobile networks. Let sing-box URLTest check actual
+        // VLESS + TLS + HTTP 204, with bounded failover, after the profile exists.
+        val outbounds = uniqueLinks.take(MAX_NODES).mapNotNull(::compileVless)
+        Log.i(TAG, "Server pool prepared: links=${links.size}, uniqueSupported=${uniqueLinks.size}, candidates=${outbounds.size}")
         if (outbounds.isEmpty()) {
             if (existing != null) {
                 // A temporary carrier outage or feed change must not destroy the
@@ -349,42 +346,6 @@ object ArtAutoProfileManager {
             else -> 5
         }
     }.getOrDefault(10)
-
-    private suspend fun filterTcpReachable(candidates: List<String>, network: Network): List<String> {
-        val semaphore = Semaphore(TCP_PROBE_CONCURRENCY)
-        val reachable = mutableListOf<String>()
-        // Probe in batches so a large feed does not create hundreds of sockets
-        // at once. Stop when enough genuinely reachable endpoints are collected.
-        for (batch in candidates.chunked(TCP_PROBE_CONCURRENCY * 2)) {
-            val results = coroutineScope {
-                batch.map { link ->
-                    async(Dispatchers.IO) {
-                        semaphore.withPermit {
-                            if (tcpReachable(link, network)) link else null
-                        }
-                    }
-                }.awaitAll()
-            }
-            reachable += results.filterNotNull()
-            if (reachable.size >= MAX_NODES) break
-        }
-        return reachable.take(MAX_NODES)
-    }
-
-    private fun tcpReachable(link: String, network: Network): Boolean = runCatching {
-        val uri = URI(link.trim())
-        val host = uri.host ?: error("missing host")
-        val port = uri.port
-        require(port in 1..65535)
-        network.getAllByName(host).any { address ->
-            runCatching {
-                network.socketFactory.createSocket().use { socket ->
-                    socket.connect(InetSocketAddress(address, port), TCP_PROBE_TIMEOUT_MS)
-                    socket.isConnected
-                }
-            }.getOrDefault(false)
-        }
-    }.getOrDefault(false)
 
     private fun nodeIdentity(link: String): String? = runCatching {
         val uri = URI(link.trim())
