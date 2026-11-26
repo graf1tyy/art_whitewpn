@@ -21,6 +21,10 @@ func (d artURLTestDialer) DialContext(ctx context.Context, network string, _ M.S
 	return (&net.Dialer{}).DialContext(ctx, network, d.address)
 }
 
+func (d artURLTestDialer) ListenPacket(ctx context.Context, _ M.Socksaddr) (net.PacketConn, error) {
+	return nil, context.Canceled
+}
+
 func TestARTURLTestAcceptsOnlyHTTP204(t *testing.T) {
 	tests := []struct {
 		name      string
