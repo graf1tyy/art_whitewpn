@@ -289,7 +289,7 @@ object ArtAutoProfileManager {
                 val body = runCatching { fetch(source, network) }.onFailure {
                     Log.d(TAG, "Feed mirror failed: ${URI(source).host}: ${it.message}")
                 }.getOrNull() ?: return@async
-                val parsed = Regex("""(?i)vless://[^\\s\'"<>]+""")
+                val parsed = Regex("""(?i)vless://[^\s"'<>]+""")
                     .findAll(body.replace("&amp;", "&"))
                     .map { it.value.trimEnd(',', ';', ')', ']', '.') }
                     .filter { compileVless(it) != null }
