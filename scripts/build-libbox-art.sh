@@ -286,8 +286,8 @@ assert "s.group.updateAccess.Lock()" in dial_select_replacement
 # and networks can filter gstatic while allowing other HTTPS destinations.
 health_source = core / "common/urltest/urltest.go"
 health_text = health_source.read_text()
-import_anchor = 'import (\\n\\t"context"\\n\\t"crypto/tls"'
-import_replacement = 'import (\\n\\t"context"\\n\\t"crypto/tls"\\n\\t"fmt"'
+import_anchor = 'import (\n\t"context"\n\t"crypto/tls"'
+import_replacement = 'import (\n\t"context"\n\t"crypto/tls"\n\t"fmt"'
 assert health_text.count(import_anchor) == 1, "URLTest import block changed"
 health_text = health_text.replace(import_anchor, import_replacement, 1)
 old_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) (uint16, error) {
@@ -345,7 +345,6 @@ new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) 
 }"""
 assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in new_health, "Multi-endpoint URLTest deadline missing"
 assert health_text.count(old_health) == 1, "sing-box URLTest function changed; refusing unsafe patch"
-assert "resp.StatusCode != http.StatusNoContent" in health_text or "status_after" in locals()
 health_text = health_text.replace(old_health, new_health, 1)
 
 # A successful TCP/TLS handshake is not enough: only the dedicated no-content
@@ -359,6 +358,7 @@ status_after = """\tresp.Body.Close()
 \tt = uint16(time.Since(start) / time.Millisecond)"""
 assert health_text.count(status_before) == 1, "URLTest HTTP status anchor changed"
 health_text = health_text.replace(status_before, status_after, 1)
+assert "resp.StatusCode != http.StatusNoContent" in health_text, "Strict HTTP 204 health check missing"
 health_source.write_text(health_text)
 
 # Add executable regression tests for success, captive portal and HTTP error responses.
