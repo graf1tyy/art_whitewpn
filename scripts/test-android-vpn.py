@@ -119,16 +119,34 @@ def main() -> int:
     adb("shell", "am", "force-stop", PACKAGE)
     adb("shell", "am", "start", "-n", ACTIVITY, timeout=30)
 
-    root = wait_for(
-        lambda r: any(
-            a.get("content-desc") == CONNECT_DESC and a.get("clickable") == "true"
-            for a in (n.attrib for n in r.iter())
-        ),
-        150,
-        "ART Auto profile and enabled Connect action",
-    )
-    if not tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC and a.get("clickable") == "true"):
-        raise RuntimeError("Could not tap the accessible Connect VPN action")
+    def has_action(root: ET.Element, description: str) -> bool:
+        return any(
+            a.get("content-desc") == description and a.get("clickable") == "true"
+            for a in (node.attrib for node in root.iter())
+        )
+
+    # First launch may need one explicit recovery search after network setup.
+    # Exercise that built-in path automatically instead of timing out while
+    # waiting only for the Connect label.
+    connected_action = False
+    for attempt in range(3):
+        root = wait_for(
+            lambda r: has_action(r, CONNECT_DESC) or has_action(r, "Retry server search"),
+            210,
+            "ART Auto profile: Connect or Retry server search action",
+        )
+        if has_action(root, "Retry server search"):
+            print(f"ART Auto profile not ready; triggering in-app retry {attempt + 1}/3")
+            if not tap_node(root, lambda a: a.get("content-desc") == "Retry server search" and a.get("clickable") == "true"):
+                raise RuntimeError("Could not tap the accessible Retry server search action")
+            continue
+        if tap_node(root, lambda a: a.get("content-desc") == CONNECT_DESC and a.get("clickable") == "true"):
+            connected_action = True
+            break
+        raise RuntimeError("Connect action was visible but could not be activated")
+
+    if not connected_action:
+        raise RuntimeError("ART Auto did not prepare a connectable profile after three automatic search attempts")
 
     accept_vpn_consent()
     wait_for(lambda r: contains_text(r, STATUS_TEXT), 150, "verified HTTP 204 through Android VPN/TUN")
