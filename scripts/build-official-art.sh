@@ -139,6 +139,18 @@ simple_content = """        val scaffoldContent: @Composable (PaddingValues) -> 
                 modifier = Modifier.fillMaxSize().padding(paddingValues),
                 onConnect = { startService() },
                 onDisconnect = { dashboardViewModel.toggleService() },
+                onRetry = {
+                    lifecycleScope.launch(Dispatchers.IO) {
+                        runCatching {
+                            io.nekohasekai.sfa.artvpn.ArtAutoProfileManager.installOrRefresh(
+                                this@MainActivity,
+                                force = true
+                            )
+                        }.onFailure {
+                            Log.w("ART VPN", "Manual server search failed: ${it.message}", it)
+                        }
+                    }
+                },
             )
         }
 
