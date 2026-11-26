@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,6 +36,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import io.nekohasekai.sfa.constant.Status
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -52,8 +57,19 @@ internal fun ArtHomeScreen(
     modifier: Modifier = Modifier,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     var tunnelVerified by remember { mutableStateOf(false) }
+    var preparationTimedOut by remember { mutableStateOf(false) }
+    var retryCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(serviceStatus, canConnect, retryCount) {
+        preparationTimedOut = false
+        if (serviceStatus == Status.Stopped && !canConnect) {
+            delay(45_000L)
+            preparationTimedOut = true
+        }
+    }
 
     // "Started" only means Android created the VPN interface. Do not call it
     // connected until a real HTTPS 204 response has passed through the tunnel.
@@ -67,16 +83,18 @@ internal fun ArtHomeScreen(
         }
     }
 
-    val preparing = serviceStatus == Status.Stopped && !canConnect
+    val preparing = serviceStatus == Status.Stopped && !canConnect && !preparationTimedOut
     val starting = serviceStatus == Status.Starting
     val stopping = serviceStatus == Status.Stopping
     val running = serviceStatus == Status.Started
     val connected = running && tunnelVerified
     val searching = running && !tunnelVerified
     val busy = preparing || starting || stopping || searching
-    val buttonEnabled = (serviceStatus == Status.Stopped && canConnect) || running
+    val buttonEnabled = (serviceStatus == Status.Stopped && canConnect) ||
+        (serviceStatus == Status.Stopped && preparationTimedOut) || running
 
     val statusText = when {
+        preparationTimedOut -> "Не удалось подготовить серверы"
         preparing -> "Подготавливаем серверы"
         starting -> "Запускаем VPN"
         stopping -> "Отключаем VPN"
@@ -85,6 +103,7 @@ internal fun ArtHomeScreen(
         else -> "Готово к подключению"
     }
     val actionText = when {
+        preparationTimedOut -> "ПОВТОРИТЬ ПОИСК"
         preparing -> "ПОДГОТОВКА"
         starting -> "ПОДКЛЮЧЕНИЕ"
         stopping -> "ОТКЛЮЧЕНИЕ"
@@ -167,8 +186,24 @@ internal fun ArtHomeScreen(
                         .size(188.dp)
                         .clip(CircleShape)
                         .background(Color.White)
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = when {
+                                preparationTimedOut -> "Retry server search"
+                                running -> "Disconnect VPN"
+                                else -> "Connect VPN"
+                            }
+                            role = Role.Button
+                        }
                         .clickable(enabled = buttonEnabled) {
-                            if (running) onDisconnect() else onConnect()
+                            when {
+                                running -> onDisconnect()
+                                preparationTimedOut -> {
+                                    preparationTimedOut = false
+                                    retryCount++
+                                    onRetry()
+                                }
+                                else -> onConnect()
+                            }
                         },
                     contentAlignment = Alignment.Center,
                 ) {
@@ -180,7 +215,11 @@ internal fun ArtHomeScreen(
                         )
                     } else {
                         Text(
-                            text = if (connected) "ON" else "OFF",
+                            text = when {
+                            preparationTimedOut -> "↻"
+                            connected -> "ON"
+                            else -> "OFF"
+                        },
                             color = Color.Black,
                             fontSize = 34.sp,
                             fontWeight = FontWeight.Bold,
@@ -203,10 +242,10 @@ internal fun ArtHomeScreen(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                text = if (connected) {
-                    "Трафик проходит через VPN"
-                } else {
-                    "Автоматический подбор лучшего сервера"
+                text = when {
+                    connected -> "Трафик проходит через VPN"
+                    preparationTimedOut -> "Проверьте интернет и повторите поиск серверов"
+                    else -> "Автоматический подбор лучшего сервера"
                 },
                 color = Color(0xFF858585),
                 fontSize = 13.sp,
@@ -236,7 +275,7 @@ private suspend fun verifyArtTunnel(): Boolean {
                         connection.setRequestProperty("Cache-Control", "no-cache")
                         connection.setRequestProperty("User-Agent", "ART-VPN-Android/1.0")
                         val code = connection.responseCode
-                        code in 200..399
+                        code == 204
                     } catch (_: Exception) {
                         false
                     } finally {
