@@ -199,3 +199,13 @@ if [[ -z "$APK" ]]; then
   exit 1
 fi
 cp "$APK" "$ROOT/dist/ART-VPN-arm64.apk"
+
+UNIVERSAL_APK=""
+for candidate in "${APKS[@]}"; do
+  if [[ "$candidate" == *universal* ]]; then UNIVERSAL_APK="$candidate"; break; fi
+done
+if [[ -z "$UNIVERSAL_APK" ]]; then
+  echo "Could not find the universal APK required for Android VPN emulator testing" >&2
+  exit 1
+fi
+cp "$UNIVERSAL_APK" "$ROOT/dist/ART-VPN-universal.apk"
