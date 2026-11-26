@@ -68,6 +68,15 @@ icon_dst.write_bytes(icon_src.read_bytes())
 
 manifest = up / "app/src/main/AndroidManifest.xml"
 m = manifest.read_text()
+
+# ART queries ConnectivityManager before importing the generated profile.
+# The upstream manifest does not include this permission by default.
+network_permission = '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />'
+internet_permission = '    <uses-permission android:name="android.permission.INTERNET" />'
+if network_permission not in m:
+    assert m.count(internet_permission) == 1, "Unexpected upstream INTERNET permission marker"
+    m = m.replace(internet_permission, internet_permission + "\n" + network_permission, 1)
+
 m = m.replace('android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/ic_vpn"')
 if 'android:roundIcon=' not in m:
     m = m.replace('android:icon="@drawable/ic_vpn"', 'android:icon="@drawable/ic_vpn"\n        android:roundIcon="@drawable/ic_vpn"', 1)
@@ -96,7 +105,7 @@ if "ArtAutoProfileManager.installOrRefresh" not in a:
                 runCatching {
                     io.nekohasekai.sfa.artvpn.ArtAutoProfileManager.installOrRefresh(this@Application)
                 }.onFailure {
-                    Log.w("ART VPN", "Unable to install automatic server profile: ${it.message}")
+                    Log.w("ART VPN", "Unable to install automatic server profile: ${it.message}", it)
                 }
                 val artRefresh = androidx.work.PeriodicWorkRequestBuilder<
                     io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
@@ -105,6 +114,16 @@ if "ArtAutoProfileManager.installOrRefresh" not in a:
                     "art-auto-profile-refresh",
                     androidx.work.ExistingPeriodicWorkPolicy.UPDATE,
                     artRefresh
+                )
+                // A physical network can appear shortly after Application.onCreate.
+                // Retry bootstrap once; revision checks make successful installs a no-op.
+                val artBootstrapRetry = androidx.work.OneTimeWorkRequestBuilder<
+                    io.nekohasekai.sfa.artvpn.ArtAutoProfileWorker
+                >().setInitialDelay(20, java.util.concurrent.TimeUnit.SECONDS).build()
+                androidx.work.WorkManager.getInstance(this@Application).enqueueUniqueWork(
+                    "art-auto-profile-bootstrap-retry",
+                    androidx.work.ExistingWorkPolicy.KEEP,
+                    artBootstrapRetry
                 )''',
         1
     )
