@@ -94,8 +94,10 @@ object ArtAutoProfileManager {
     suspend fun installOrRefresh(context: Context, force: Boolean = false) = refreshLock.withLock {
         withContext(Dispatchers.IO) {
         val app = context.applicationContext
+        Log.i(TAG, "Profile discovery entered force=$force")
         val profiles = ProfileManager.list()
         val existing = profiles.firstOrNull { it.name == PROFILE_NAME }
+        Log.i(TAG, "Profile database ready: count=${profiles.size}, artAutoPresent=${existing != null}")
         val preferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val lastUpdated = preferences.getLong(KEY_UPDATED, 0L)
         val savedRevision = preferences.getInt(KEY_PROFILE_REVISION, 0)
@@ -150,7 +152,7 @@ object ArtAutoProfileManager {
             selected
         }
         if (physicalNetwork == null) {
-            Log.w(TAG, "No physical internet network after 20 seconds; keeping the current ART Auto profile")
+            Log.e(TAG, "No physical internet network after 20 seconds; keeping the current ART Auto profile")
             if (existing != null) return@withContext
             error("Android не предоставил приложению физическую сеть с доступом в интернет.")
         }
@@ -176,6 +178,7 @@ object ArtAutoProfileManager {
             .filter { compileVless(it) != null }
             .take(320)
         if (uniqueLinks.isEmpty()) {
+            Log.e(TAG, "No supported VLESS configs parsed: links=${links.size}, feedGroups=${feedResults.count { it.isNotEmpty() }}")
             error("Не удалось загрузить поддерживаемые VLESS-конфигурации; текущий профиль ART Auto сохранён.")
         }
         val reachableLinks = filterTcpReachable(uniqueLinks, physicalNetwork)
@@ -233,7 +236,9 @@ object ArtAutoProfileManager {
 
         // Let the exact bundled sing-box version reject invalid JSON/schema before
         // saving it as the active profile.
+        Log.i(TAG, "Validating generated sing-box config with ${outbounds.size} VLESS outbounds")
         Libbox.checkConfig(config)
+        Log.i(TAG, "Generated sing-box config passed native validation")
 
         val target = existing ?: Profile(name = PROFILE_NAME, typed = TypedProfile())
         target.name = PROFILE_NAME
@@ -255,6 +260,7 @@ object ArtAutoProfileManager {
         } else {
             ProfileManager.update(target)
         }
+        Log.i(TAG, "ART Auto profile row saved id=${target.id}, path=${target.typed.path}")
 
         // ProfileManager.update() deliberately preserves upstream selection.
         // For ART VPN, the generated ART Auto TUN profile must always be active.
