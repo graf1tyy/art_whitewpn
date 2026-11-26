@@ -10,13 +10,15 @@ on:
 permissions:
   contents: write
 
+# Do not let a stuck emulator/native build block every later repair attempt.
 concurrency:
-  group: art-vpn-repair-build-${{ github.ref }}
-  cancel-in-progress: true
+  group: art-vpn-repair-build-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout ART project and overlays
         uses: actions/checkout@v4
