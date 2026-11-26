@@ -114,6 +114,7 @@ def main() -> int:
     else:
         raise TimeoutError("Android emulator did not finish booting")
 
+    adb("logcat", "-c", check=False)
     adb("install", "-r", str(apk), timeout=180)
     adb("shell", "pm", "grant", PACKAGE, "android.permission.POST_NOTIFICATIONS", check=False)
     adb("shell", "am", "force-stop", PACKAGE)
@@ -187,8 +188,21 @@ if __name__ == "__main__":
             except Exception as diagnostic_error:
                 print(f"{label} unavailable: {diagnostic_error}", file=sys.stderr)
         try:
-            print("--- logcat ---", file=sys.stderr)
-            print(adb("logcat", "-d", "-t", "2000", "-v", "time", timeout=30, check=False)[-30000:], file=sys.stderr)
+            print("--- ART bootstrap and profile logcat ---", file=sys.stderr)
+            print(
+                adb(
+                    "logcat", "-d", "-v", "time",
+                    "-s", "ART-BOOT:V", "ART-AUTO:V", "ART VPN:V", "Application:V",
+                    "BoxService:V", "AndroidRuntime:E",
+                    timeout=30, check=False
+                )[-30000:],
+                file=sys.stderr,
+            )
+            print("--- network diagnostics ---", file=sys.stderr)
+            print(adb("shell", "dumpsys", "connectivity", timeout=30, check=False)[-10000:], file=sys.stderr)
+            print(adb("shell", "ip", "route", "show", "table", "all", timeout=15, check=False)[-5000:], file=sys.stderr)
+            print("--- recent logcat ---", file=sys.stderr)
+            print(adb("logcat", "-d", "-t", "500", "-v", "time", timeout=30, check=False)[-12000:], file=sys.stderr)
         except Exception:
             pass
         raise
