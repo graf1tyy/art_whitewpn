@@ -425,10 +425,31 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$CORE_DIR"
-echo "[ART-BUILD] Building Android ARM64 libbox AAR (20 minute limit)"
-timeout 20m go run ./cmd/internal/build_libbox -target android -platform android/arm64
+echo "[ART-BUILD] Building multi-ABI Android libbox AAR (30 minute limit)"
+# Do not pass -platform android/arm64 here: gomobile's default android target
+# bundles arm, arm64, x86 and x86_64. The APK has an emulator test and a
+# universal split, so every ABI it advertises must ship libbox.so.
+timeout 30m go run ./cmd/internal/build_libbox -target android
 
 test -s "$UPSTREAM_DIR/app/libs/libbox.aar"
 test -s "$UPSTREAM_DIR/app/libs/libbox-legacy.aar"
+python3 - "$UPSTREAM_DIR/app/libs/libbox.aar" "$UPSTREAM_DIR/app/libs/libbox-legacy.aar" <<'PY'
+import sys
+import zipfile
+
+required = {"arm64-v8a", "x86_64"}
+for path in sys.argv[1:]:
+    with zipfile.ZipFile(path) as aar:
+        entries = aar.namelist()
+    abis = {
+        entry.split("/")[1]
+        for entry in entries
+        if entry.startswith("jni/") and entry.endswith("/libbox.so")
+    }
+    print(f"{path}: packaged libbox.so ABIs={sorted(abis)}")
+    missing = required - abis
+    if missing:
+        raise SystemExit(f"{path} is missing native libbox.so for: {sorted(missing)}")
+PY
 echo "Built patched libbox AARs:"
 sha256sum "$UPSTREAM_DIR/app/libs/libbox.aar" "$UPSTREAM_DIR/app/libs/libbox-legacy.aar"
