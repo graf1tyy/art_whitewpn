@@ -29,9 +29,9 @@ else
   git -C "$CORE_DIR" checkout --detach "$CORE_TAG"
 fi
 
-# Preserve URLTest's verified-fastest selection, but use a rotating provisional
-# candidate until the first successful HTTPS test. Failed dials rotate to the
-# next candidate instead of pinning the first dead node or black-holing traffic.
+# URLTest uses only nodes that have passed VLESS + TLS + HTTP 204.
+# Never select the first public-feed entry as an unverified provisional route.
+# Failed selected-node dials clear that node's history and trigger healthy-node reselection.
 python3 - "$CORE_DIR" "$ROOT/scripts/urltest_art_test.go" <<'PY'
 from pathlib import Path
 import sys
@@ -163,7 +163,7 @@ text = text.replace(dial_failure, dial_replacement_udp, 1)
 # Surface health-check failures at WARN level because the ART profile normally
 # runs with sing-box log level=warn. This reveals why candidates were rejected.
 unavailable_log = 'b.logger.Debug("outbound ", tag, " unavailable: ", testResult.err)'
-unavailable_warning = 'b.logger.Debug("outbound ", tag, " unavailable: ", testResult.err)'
+unavailable_warning = 'b.logger.Warn("outbound ", tag, " unavailable: ", testResult.err)'
 assert text.count(unavailable_log) == 1, "URLTest failure log line changed"
 text = text.replace(unavailable_log, unavailable_warning, 1)
 
@@ -277,10 +277,11 @@ text = text.replace(update_replacement, update_replacement + failover_helper, 1)
 assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
 assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
 assert "context.WithTimeout(ctx, 5*time.Second)" in text, "Fast VLESS dial timeout patch missing"
-assert "currentIndex+1)%len(candidates)" in text, "Fallback does not skip the previous outbound"
+assert "A node is not eligible merely because it was first in a public feed." in text, "Untested public-feed fallback is not disabled"
+assert "return nil, false" in text, "URLTest still has an unsafe default candidate"
 assert "if outbound, _ := g.Select(N.NetworkTCP); outbound != nil && outbound != g.selectedOutboundTCP {" in text
 assert "if outbound, _ := g.Select(N.NetworkUDP); outbound != nil && outbound != g.selectedOutboundUDP {" in text
-assert "context.WithTimeout(b.ctx, 6*time.Second)" in text
+assert "context.WithTimeout(b.ctx, 8*time.Second)" in text
 assert "s.group.updateAccess.Lock()" in dial_selection_replacement
 
 # URLTest must not depend on a single health-check host: mobile operators
