@@ -118,7 +118,7 @@ def main() -> int:
     capture_path = Path("/tmp/art-vpn-android-logcat.txt")
     capture_file = capture_path.open("w", encoding="utf-8")
     capture_process = subprocess.Popen(
-        ["adb", "logcat", "-v", "time", "-s", "ART-BOOT:V", "ART-AUTO:V", "Application:V", "BoxService:V", "AndroidRuntime:E"],
+        ["adb", "logcat", "-v", "time", "-s", "ART-BOOT:V", "ART-AUTO:V", "Application:V", "BoxService:V", "sing-box:V", "AndroidRuntime:E"],
         text=True,
         stdout=capture_file,
         stderr=subprocess.DEVNULL,

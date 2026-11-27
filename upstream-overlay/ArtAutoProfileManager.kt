@@ -40,10 +40,10 @@ object ArtAutoProfileManager {
     private const val PREFS = "art_auto_profile"
     private const val KEY_UPDATED = "updated_at"
     private const val KEY_PROFILE_REVISION = "profile_revision"
-    private const val PROFILE_REVISION = 12
+    private const val PROFILE_REVISION = 13
     private const val REFRESH_INTERVAL = 60L * 60 * 1000
     private const val MAX_BODY = 4 * 1024 * 1024
-    private const val MAX_NODES = 96
+    private const val MAX_NODES = 192
     private val uuidPattern = Regex("(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     private val refreshLock = Mutex()
     private val supportedFingerprints = setOf(
@@ -150,7 +150,7 @@ object ArtAutoProfileManager {
             if (existing != null) return@withContext
             error("Android не предоставил приложению физическую сеть с доступом в интернет.")
         }
-        Log.i(TAG, "Using physical network for ART feeds and TCP probes")
+        Log.i(TAG, "Using physical network for ART feed discovery")
 
         val feedResults = coroutineScope {
             feedGroups.map { mirrors -> async { fetchFirstValid(mirrors, physicalNetwork) } }.awaitAll()
@@ -175,20 +175,19 @@ object ArtAutoProfileManager {
             Log.e(TAG, "No supported VLESS configs parsed: links=${links.size}, feedGroups=${feedResults.count { it.isNotEmpty() }}")
             error("Не удалось загрузить поддерживаемые VLESS-конфигурации; текущий профиль ART Auto сохранён.")
         }
-        // Do not gate profile creation on a large batch of bare TCP/DNS pings.
-        // They are not evidence of working VLESS/TLS, and Android DNS lookups can
-        // stall on restricted mobile networks. Let sing-box URLTest check actual
-        // VLESS + TLS + HTTP 204, with bounded failover, after the profile exists.
+        // Give the native URLTest group a wider pool than one CI probe pass.
+        // It selects only nodes that complete VLESS + TLS + HTTPS 204; a TCP-open
+        // endpoint alone is never treated as a working VPN server.
         val outbounds = uniqueLinks.take(MAX_NODES).mapNotNull(::compileVless)
         Log.i(TAG, "Server pool prepared: links=${links.size}, uniqueSupported=${uniqueLinks.size}, candidates=${outbounds.size}")
         if (outbounds.isEmpty()) {
             if (existing != null) {
                 // A temporary carrier outage or feed change must not destroy the
                 // last-known profile. Keep it selected and let the user retry later.
-                Log.w(TAG, "No TCP-reachable VLESS candidates; keeping the previous ART Auto profile")
+                Log.w(TAG, "No supported VLESS candidates; keeping the previous ART Auto profile")
                 return@withContext
             }
-            error("Не найдено VLESS-серверов с доступным TCP-портом. Существующий профиль не удалён.")
+            error("Не найдено поддерживаемых VLESS-серверов. Существующий профиль не удалён.")
         }
 
         val nodeTags = JSONArray()
@@ -208,7 +207,7 @@ object ArtAutoProfileManager {
         allOutbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
 
         val config = JSONObject()
-            .put("log", JSONObject().put("level", "warn").put("timestamp", true))
+            .put("log", JSONObject().put("level", "info").put("timestamp", true))
             .put("dns", JSONObject()
                 .put("servers", JSONArray().put(JSONObject().put("type", "local").put("tag", "local")))
                 .put("final", "local"))

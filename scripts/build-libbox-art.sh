@@ -50,29 +50,9 @@ fallback = """\tif minOutbound == nil {
 \t\treturn nil, false
 \t}"""
 replacement = """\tif minOutbound == nil {
-\t\tcandidates := make([]adapter.Outbound, 0, len(g.outbounds))
-\t\tvar current adapter.Outbound
-\t\tswitch network {
-\t\tcase N.NetworkTCP:
-\t\t\tcurrent = g.selectedOutboundTCP
-\t\tcase N.NetworkUDP:
-\t\t\tcurrent = g.selectedOutboundUDP
-\t\t}
-\t\tfor _, detour := range g.outbounds {
-\t\t\tif common.Contains(detour.Network(), network) {
-\t\t\t\tcandidates = append(candidates, detour)
-\t\t\t}
-\t\t}
-\t\tif len(candidates) == 0 {
-\t\t\treturn nil, false
-\t\t}
-\t\t// Skip the outbound that just failed; wrap only after trying the pool.
-\t\tif len(candidates) > 1 && current != nil {
-\t\t\tif currentIndex := slices.Index(candidates, current); currentIndex >= 0 {
-\t\t\t\treturn candidates[(currentIndex+1)%len(candidates)], false
-\t\t\t}
-\t\t}
-\t\treturn candidates[0], false
+\t\t// A node is not eligible merely because it was first in a public feed.
+\t\t// Wait for an actual VLESS + TLS + HTTP 204 health result.
+\t\treturn nil, false
 \t}"""
 assert text.count(fallback) == 1, "sing-box URLTest fallback changed; refusing an unsafe patch"
 text = text.replace(fallback, replacement, 1)
@@ -88,7 +68,7 @@ text = text.replace(concurrency, "batch.WithConcurrencyNum[any](32)", 1)
 # while keeping automatic selection responsive on mobile networks.
 probe_timeout = "testCtx, cancel := context.WithTimeout(b.ctx, C.TCPTimeout)"
 assert text.count(probe_timeout) == 1, "URLTest probe timeout source changed"
-text = text.replace(probe_timeout, "testCtx, cancel := context.WithTimeout(b.ctx, 6*time.Second)", 1)
+text = text.replace(probe_timeout, "testCtx, cancel := context.WithTimeout(b.ctx, 8*time.Second)", 1)
 
 # A failed DialContext deleted the health history but left the group's selected
 # pointer intact. URLTest.DialContext then reused that stale pointer forever.
@@ -183,7 +163,7 @@ text = text.replace(dial_failure, dial_replacement_udp, 1)
 # Surface health-check failures at WARN level because the ART profile normally
 # runs with sing-box log level=warn. This reveals why candidates were rejected.
 unavailable_log = 'b.logger.Debug("outbound ", tag, " unavailable: ", testResult.err)'
-unavailable_warning = 'b.logger.Warn("outbound ", tag, " unavailable: ", testResult.err)'
+unavailable_warning = 'b.logger.Debug("outbound ", tag, " unavailable: ", testResult.err)'
 assert text.count(unavailable_log) == 1, "URLTest failure log line changed"
 text = text.replace(unavailable_log, unavailable_warning, 1)
 
@@ -250,6 +230,13 @@ update_replacement = """func (g *URLTestGroup) performUpdateCheck() {
 \tif selected {
 \t\tg.history.NotifyUpdated()
 \t}
+\thealthy := 0
+\tfor _, detour := range g.outbounds {
+\t\tif g.history.LoadURLTestHistory(RealTag(detour, N.NetworkTCP)) != nil {
+\t\t\thealthy++
+\t\t}
+\t}
+\tg.logger.Info("ART URLTest health: ", healthy, "/", len(g.outbounds), " VLESS nodes")
 }"""
 assert text.count(update_check) == 1, "URLTest selection update implementation changed"
 text = text.replace(update_check, update_replacement, 1)
@@ -328,7 +315,7 @@ new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) 
 \t}
 \tvar lastError error
 \tfor _, probeURL := range links {
-\t\tprobeContext, cancel := context.WithTimeout(ctx, 2100*time.Millisecond)
+\t\tprobeContext, cancel := context.WithTimeout(ctx, 2600*time.Millisecond)
 \t\tmultiplexOutbound, isMultiplexOutbound := common.Cast[adapter.OutboundWithMultiplex](detour)
 \t\tif isMultiplexOutbound && multiplexOutbound.MultiplexEnabled() {
 \t\t\twarmContext := adapter.ContextWithKeepSession(probeContext)
