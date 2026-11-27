@@ -345,7 +345,7 @@ new_health = """func URLTest(ctx context.Context, link string, detour N.Dialer) 
 \t}
 \treturn 0, lastError
 }"""
-assert "context.WithTimeout(ctx, 2100*time.Millisecond)" in new_health, "Multi-endpoint URLTest deadline missing"
+assert "context.WithTimeout(probeContext, 2600*time.Millisecond)" in new_health, "Multi-endpoint URLTest deadline missing"
 assert health_text.count(old_health) == 1, "sing-box URLTest function changed; refusing unsafe patch"
 health_text = health_text.replace(old_health, new_health, 1)
 
