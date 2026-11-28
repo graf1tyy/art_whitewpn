@@ -299,10 +299,14 @@ post_start_old = """func (g *URLTestGroup) PostStart() {
 }"""
 post_start_new = """func (g *URLTestGroup) PostStart() {
 	g.access.Lock()
-	defer g.access.Unlock()
+	if g.started {
+		g.access.Unlock()
+		return
+	}
 	g.started = true
 	g.lastActive.Store(time.Now())
-	g.logger.Info("ART URLTest initial check goroutine starting: candidates=", len(g.outbounds), " interval=", g.interval)
+	g.logger.Warn("ART URLTest health scheduler started: candidates=", len(g.outbounds), " interval=", g.interval)
+	g.access.Unlock()
 	go func() {
 		startedAt := time.Now()
 		g.CheckOutbounds(g.ctx, false)
@@ -311,6 +315,22 @@ post_start_new = """func (g *URLTestGroup) PostStart() {
 }"""
 assert text.count(post_start_old) == 1, "URLTest PostStart anchor changed"
 text = text.replace(post_start_old, post_start_new, 1)
+
+# As a defensive fallback, the first route lookup starts URLTest even if an
+# upstream lifecycle callback was missed. PostStart is idempotent, so this is
+# safe when the normal StartStateStarted callback also runs.
+selected_old = """func (s *URLTest) Selected(network string) adapter.Outbound {
+	var outbound adapter.Outbound"""
+selected_new = """func (s *URLTest) Selected(network string) adapter.Outbound {
+	if s.group == nil {
+		s.logger.Warn("ART URLTest selected before group initialization")
+		return nil
+	}
+	s.group.PostStart()
+	var outbound adapter.Outbound"""
+assert text.count(selected_old) == 1, "URLTest Selected method anchor changed"
+text = text.replace(selected_old, selected_new, 1)
+assert "s.group.PostStart()\n\tvar outbound adapter.Outbound" in text
 
 url_test_old = """func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint16, error) {
 	if g.checking.Swap(true) {
