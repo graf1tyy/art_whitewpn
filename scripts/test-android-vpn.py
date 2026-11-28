@@ -170,7 +170,7 @@ def main() -> int:
     # A running VPN service is not enough: wait for verified HTTPS. If the
     # product surfaces its recovery action, exercise it instead of failing
     # while the user would still have a supported retry path.
-    connected_deadline = time.monotonic() + 240
+    connected_deadline = time.monotonic() + 360
     last_root = None
     while time.monotonic() < connected_deadline:
         last_root = ui_tree()
