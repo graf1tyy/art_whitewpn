@@ -94,7 +94,7 @@ internal fun ArtHomeScreen(
                     tunnelRetryAvailable = false
                 } else {
                     val unavailableFor = now - failedSince
-                    if (unavailableFor >= 45_000L &&
+                    if (unavailableFor >= 90_000L &&
                         (lastRecoveryAt == 0L || now - lastRecoveryAt >= 180_000L)
                     ) {
                         lastRecoveryAt = now
@@ -250,7 +250,7 @@ internal fun ArtHomeScreen(
                     } else {
                         Text(
                             text = when {
-                            preparationTimedOut -> "↻"
+                            preparationTimedOut || searchRetryAvailable -> "↻"
                             connected -> "ON"
                             else -> "OFF"
                         },
