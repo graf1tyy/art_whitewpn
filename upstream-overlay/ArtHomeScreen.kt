@@ -6,6 +6,8 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import android.os.SystemClock
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -62,6 +64,7 @@ internal fun ArtHomeScreen(
     var tunnelVerified by remember { mutableStateOf(false) }
     var preparationTimedOut by remember { mutableStateOf(false) }
     var retryCount by remember { mutableIntStateOf(0) }
+    var tunnelRetryAvailable by remember { mutableStateOf(false) }
 
     LaunchedEffect(serviceStatus, canConnect, retryCount) {
         preparationTimedOut = false
@@ -73,12 +76,36 @@ internal fun ArtHomeScreen(
 
     // "Started" only means Android created the VPN interface. Do not call it
     // connected until a real HTTPS 204 response has passed through the tunnel.
-    LaunchedEffect(serviceStatus) {
+    // If the server pool stays unhealthy, refresh it automatically. After that,
+    // expose a manual retry instead of leaving the user on an endless spinner.
+    LaunchedEffect(serviceStatus, retryCount) {
         tunnelVerified = false
+        tunnelRetryAvailable = false
         if (serviceStatus == Status.Started) {
+            var failedSince = SystemClock.elapsedRealtime()
+            var lastRecoveryAt = 0L
             while (true) {
-                tunnelVerified = verifyArtTunnel()
-                delay(if (tunnelVerified) 12_000L else 1_200L)
+                val verified = verifyArtTunnel()
+                tunnelVerified = verified
+                val now = SystemClock.elapsedRealtime()
+                if (verified) {
+                    failedSince = now
+                    lastRecoveryAt = 0L
+                    tunnelRetryAvailable = false
+                } else {
+                    val unavailableFor = now - failedSince
+                    if (unavailableFor >= 45_000L &&
+                        (lastRecoveryAt == 0L || now - lastRecoveryAt >= 180_000L)
+                    ) {
+                        lastRecoveryAt = now
+                        Log.w("ART-VPN", "Tunnel has no verified HTTPS route; refreshing VLESS server pool")
+                        onRetry()
+                    }
+                    if (lastRecoveryAt != 0L && now - lastRecoveryAt >= 45_000L) {
+                        tunnelRetryAvailable = true
+                    }
+                }
+                delay(if (verified) 12_000L else 1_200L)
             }
         }
     }
@@ -89,7 +116,8 @@ internal fun ArtHomeScreen(
     val running = serviceStatus == Status.Started
     val connected = running && tunnelVerified
     val searching = running && !tunnelVerified
-    val busy = preparing || starting || stopping || searching
+    val searchRetryAvailable = running && tunnelRetryAvailable
+    val busy = preparing || starting || stopping || (searching && !searchRetryAvailable)
     val buttonEnabled = (serviceStatus == Status.Stopped && canConnect) ||
         (serviceStatus == Status.Stopped && preparationTimedOut) || running
 
@@ -99,11 +127,12 @@ internal fun ArtHomeScreen(
         starting -> "Запускаем VPN"
         stopping -> "Отключаем VPN"
         connected -> "Подключено · интернет проверен"
+        searchRetryAvailable -> "Серверы не отвечают"
         searching -> "Ищем рабочий сервер"
         else -> "Готово к подключению"
     }
     val actionText = when {
-        preparationTimedOut -> "ПОВТОРИТЬ ПОИСК"
+        preparationTimedOut || searchRetryAvailable -> "ПОВТОРИТЬ ПОИСК"
         preparing -> "ПОДГОТОВКА"
         starting -> "ПОДКЛЮЧЕНИЕ"
         stopping -> "ОТКЛЮЧЕНИЕ"
@@ -188,7 +217,7 @@ internal fun ArtHomeScreen(
                         .background(Color.White)
                         .semantics(mergeDescendants = true) {
                             contentDescription = when {
-                                preparationTimedOut -> "Retry server search"
+                                preparationTimedOut || searchRetryAvailable -> "Retry server search"
                                 running -> "Disconnect VPN"
                                 else -> "Connect VPN"
                             }
@@ -196,6 +225,11 @@ internal fun ArtHomeScreen(
                         }
                         .clickable(enabled = buttonEnabled) {
                             when {
+                                running && searchRetryAvailable -> {
+                                    tunnelRetryAvailable = false
+                                    retryCount++
+                                    onRetry()
+                                }
                                 running -> onDisconnect()
                                 preparationTimedOut -> {
                                     preparationTimedOut = false
@@ -244,7 +278,7 @@ internal fun ArtHomeScreen(
             Text(
                 text = when {
                     connected -> "Трафик проходит через VPN"
-                    preparationTimedOut -> "Проверьте интернет и повторите поиск серверов"
+                    preparationTimedOut || searchRetryAvailable -> "Обновить список рабочих серверов"
                     else -> "Автоматический подбор лучшего сервера"
                 },
                 color = Color(0xFF858585),
