@@ -274,6 +274,89 @@ func (g *URLTestGroup) performFailover(network string, failed adapter.Outbound) 
 assert text.count(update_replacement) == 1, "URLTest update helper anchor changed"
 text = text.replace(update_replacement, update_replacement + failover_helper, 1)
 
+# Emit lifecycle checkpoints on Android so a stuck or unstarted URLTest group
+# is distinguishable from a pool containing no healthy servers.
+start_anchor = """		s.group = group
+	case adapter.StartStateStarted:
+		s.group.PostStart()
+		scope.Add(s.group.Close)"""
+start_replacement = """		s.group = group
+		s.logger.Info("ART URLTest group created: candidates=", len(s.tags), " healthURL=", s.link)
+	case adapter.StartStateStarted:
+		s.logger.Info("ART URLTest lifecycle reached Started; scheduling initial health check")
+		s.group.PostStart()
+		s.logger.Info("ART URLTest PostStart returned")
+		scope.Add(s.group.Close)"""
+assert text.count(start_anchor) == 1, "URLTest lifecycle start anchor changed"
+text = text.replace(start_anchor, start_replacement, 1)
+
+post_start_old = """func (g *URLTestGroup) PostStart() {
+	g.access.Lock()
+	defer g.access.Unlock()
+	g.started = true
+	g.lastActive.Store(time.Now())
+	go g.CheckOutbounds(g.ctx, false)
+}"""
+post_start_new = """func (g *URLTestGroup) PostStart() {
+	g.access.Lock()
+	defer g.access.Unlock()
+	g.started = true
+	g.lastActive.Store(time.Now())
+	g.logger.Info("ART URLTest initial check goroutine starting: candidates=", len(g.outbounds), " interval=", g.interval)
+	go func() {
+		startedAt := time.Now()
+		g.CheckOutbounds(g.ctx, false)
+		g.logger.Info("ART URLTest initial check goroutine completed after ", time.Since(startedAt))
+	}()
+}"""
+assert text.count(post_start_old) == 1, "URLTest PostStart anchor changed"
+text = text.replace(post_start_old, post_start_new, 1)
+
+url_test_old = """func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint16, error) {
+	if g.checking.Swap(true) {
+		return make(map[string]uint16), nil
+	}
+	defer g.checking.Store(false)
+	result := URLTestOutbounds(ctx, g.outbound, g.history, g.logger, g.outbounds, g.link, g.interval, force)
+	g.performUpdateCheck()
+	return result, nil
+}"""
+url_test_new = """func (g *URLTestGroup) urlTest(ctx context.Context, force bool) (map[string]uint16, error) {
+	if g.checking.Swap(true) {
+		g.logger.Warn("ART URLTest check skipped: another check is already running")
+		return make(map[string]uint16), nil
+	}
+	defer g.checking.Store(false)
+	startedAt := time.Now()
+	g.logger.Info("ART URLTest check started: candidates=", len(g.outbounds), " force=", force)
+	result := URLTestOutbounds(ctx, g.outbound, g.history, g.logger, g.outbounds, g.link, g.interval, force)
+	g.performUpdateCheck()
+	g.logger.Info("ART URLTest check finished: healthy=", len(result), "/", len(g.outbounds), " elapsed=", time.Since(startedAt))
+	return result, nil
+}"""
+assert text.count(url_test_old) == 1, "URLTest batch entry anchor changed"
+text = text.replace(url_test_old, url_test_new, 1)
+
+batch_old = """func URLTestOutbounds(ctx context.Context, outboundManager adapter.OutboundManager, history *urltest.HistoryStorage, logger log.Logger, outbounds []adapter.Outbound, link string, interval time.Duration, force bool) map[string]uint16 {
+	b, _ := batch.New(ctx, batch.WithConcurrencyNum[any](32))"""
+batch_new = """func URLTestOutbounds(ctx context.Context, outboundManager adapter.OutboundManager, history *urltest.HistoryStorage, logger log.Logger, outbounds []adapter.Outbound, link string, interval time.Duration, force bool) map[string]uint16 {
+	startedAt := time.Now()
+	logger.Info("ART URLTest batch scheduling: candidates=", len(outbounds), " concurrency=32 force=", force)
+	b, _ := batch.New(ctx, batch.WithConcurrencyNum[any](32))"""
+assert text.count(batch_old) == 1, "URLTest batch scheduling anchor changed"
+text = text.replace(batch_old, batch_new, 1)
+
+wait_old = """	testBatch.test(outbounds, link, interval, force)
+	b.Wait()
+	for _, outboundGroup := range testBatch.groups {"""
+wait_new = """	testBatch.test(outbounds, link, interval, force)
+	logger.Info("ART URLTest batch waiting for ", len(testBatch.checked), " scheduled outbound checks")
+	b.Wait()
+	logger.Info("ART URLTest batch completed: checked=", len(testBatch.checked), " healthy=", len(testBatch.result), " elapsed=", time.Since(startedAt))
+	for _, outboundGroup := range testBatch.groups {"""
+assert text.count(wait_old) == 1, "URLTest batch completion anchor changed"
+text = text.replace(wait_old, wait_new, 1)
+
 assert text.count("performFailover(N.NetworkTCP, outbound)") == 1
 assert text.count("performFailover(N.NetworkUDP, outbound)") == 1
 assert "context.WithTimeout(ctx, 5*time.Second)" in text, "Fast VLESS dial timeout patch missing"
