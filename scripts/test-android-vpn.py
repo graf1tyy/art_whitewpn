@@ -166,7 +166,26 @@ def main() -> int:
         raise RuntimeError("ART Auto did not prepare a connectable profile after three automatic search attempts")
 
     accept_vpn_consent()
-    wait_for(lambda r: contains_text(r, STATUS_TEXT), 150, "verified HTTP 204 through Android VPN/TUN")
+
+    # A running VPN service is not enough: wait for verified HTTPS. If the
+    # product surfaces its recovery action, exercise it instead of failing
+    # while the user would still have a supported retry path.
+    connected_deadline = time.monotonic() + 240
+    last_root = None
+    while time.monotonic() < connected_deadline:
+        last_root = ui_tree()
+        if last_root is not None and contains_text(last_root, STATUS_TEXT):
+            break
+        if last_root is not None and has_action(last_root, "Retry server search"):
+            print("Tunnel still has no verified HTTPS route; exercising in-app server recovery", flush=True)
+            if not tap_node(last_root, lambda a: a.get("content-desc") == "Retry server search"):
+                raise RuntimeError("Could not activate ART's server recovery action")
+            time.sleep(2)
+            continue
+        time.sleep(1)
+    else:
+        last_ui = ET.tostring(last_root, encoding="unicode") if last_root is not None else "unavailable"
+        raise TimeoutError(f"Timed out waiting for verified HTTPS through Android VPN/TUN; last UI: {last_ui}")
 
     connectivity = adb("shell", "dumpsys", "connectivity", timeout=30, check=False)
     vpn_dump = adb("shell", "dumpsys", "vpn", timeout=15, check=False)
