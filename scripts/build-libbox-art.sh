@@ -542,5 +542,35 @@ for path in sys.argv[1:]:
     if missing:
         raise SystemExit(f"{path} is missing native libbox.so for: {sorted(missing)}")
 PY
+
+# Verify that the patched Go implementation is actually present in the
+# native libraries consumed by the Android app. This prevents a successful
+# gomobile invocation from silently packaging an upstream/stale engine.
+python3 - "$UPSTREAM_DIR/app/libs/libbox.aar" <<'PY'
+import sys
+import zipfile
+
+required_abis = {"arm64-v8a", "x86_64"}
+required_markers = (
+    b"ART URLTest group created: candidates=",
+    b"ART URLTest health scheduler started: candidates=",
+    b"ART URLTest batch completed: checked=",
+)
+with zipfile.ZipFile(sys.argv[1]) as aar:
+    binaries = {
+        entry.split("/")[1]: aar.read(entry)
+        for entry in aar.namelist()
+        if entry.startswith("jni/") and entry.endswith("/libbox.so")
+    }
+missing_abis = required_abis - binaries.keys()
+if missing_abis:
+    raise SystemExit(f"Main libbox AAR is missing ABIs: {sorted(missing_abis)}")
+for abi in sorted(required_abis):
+    binary = binaries[abi]
+    missing_markers = [marker.decode() for marker in required_markers if marker not in binary]
+    if missing_markers:
+        raise SystemExit(f"{abi} libbox.so does not contain ART URLTest patch markers: {missing_markers}")
+    print(f"{abi}: ART URLTest patch markers verified in libbox.so")
+PY
 echo "Built patched libbox AARs:"
 sha256sum "$UPSTREAM_DIR/app/libs/libbox.aar" "$UPSTREAM_DIR/app/libs/libbox-legacy.aar"
